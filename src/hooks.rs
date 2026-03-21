@@ -2,6 +2,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 
 use crate::il2cpp_types::{Il2CppArray, Il2CppObject, Il2CppString};
 use crate::plugin_api::VtableV2;
@@ -16,6 +17,7 @@ pub static PARTS_SKILL_LIST_ITEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new
 pub static PARTS_SKILL_LIST_CONTAINER_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static DECK_SKILL_ITEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static SETUP_SKILL_CONTENT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static PARTS_SINGLE_MODE_SKILL_LIST_SETUP_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static IL2CPP_STRING_NEW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 pub static IL2CPP_GCHANDLE_NEW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -30,6 +32,16 @@ pub static NEEDS_REFRESH: AtomicBool = AtomicBool::new(false);
 pub static TRACKED_LEARNING_ITEMS: Lazy<Mutex<Vec<u32>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static TRACKED_INNER_ITEMS: Lazy<Mutex<Vec<(u32, i32)>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static TRACKED_DECK_ITEMS: Lazy<Mutex<Vec<(u32, i32)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+pub static ACTIVE_PARTS_LIST_HANDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static ACTIVE_SETUP_PARAM_HANDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static ACTIVE_RESOURCE_HASH: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+pub static LEARNING_LIST_ORIGINAL_ORDER: Lazy<Mutex<Vec<i32>>> = Lazy::new(|| Mutex::new(Vec::new()));
+pub static CONTAINER_ORIGINAL_ORDER: Lazy<Mutex<HashMap<usize, Vec<i32>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub static TRANSFORM_ORIGINAL_ORDER: Lazy<Mutex<HashMap<(usize, i32), (usize, i32, i32)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub static HINT_ORIGINAL_ORDER: Lazy<Mutex<HashMap<usize, Vec<i32>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub static SETUP_LIST_ORIGINAL_ORDER: Lazy<Mutex<HashMap<usize, Vec<i32>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub unsafe fn get_valid_target(handle: u32) -> *mut Il2CppObject {
     let get_target_ptr = IL2CPP_GCHANDLE_GET_TARGET.load(Ordering::Relaxed);
@@ -116,6 +128,14 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
             interceptor, crate::get_real_target_addr(setup_skill_content_addr as *mut u8), setup_skill_content_hook as *mut c_void
         ), Ordering::SeqCst);
     }
+
+    let class_single_mode_skill_list = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillList".as_ptr());
+    let setup_list_addr = (vtable.il2cpp_get_method_addr)(class_single_mode_skill_list, c"Setup".as_ptr(), 2);
+    if !setup_list_addr.is_null() {
+        PARTS_SINGLE_MODE_SKILL_LIST_SETUP_ORIG.store((vtable.interceptor_hook)(
+            interceptor, crate::get_real_target_addr(setup_list_addr as *mut u8), parts_single_mode_skill_list_setup_hook as *mut c_void
+        ), Ordering::SeqCst);
+    }
 }
 
 pub fn trigger_list_refresh() {
@@ -128,6 +148,7 @@ unsafe fn apply_live_ui_updates() {
     let state = { crate::data::OPTIMIZER_STATE.lock().unwrap().clone() };
     let strategy = state.target_strategy;
     let desc = state.sort_descending;
+    let enable_scoring = state.enable_scoring;
 
     let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
 
@@ -171,15 +192,16 @@ unsafe fn apply_live_ui_updates() {
         update_learning_item_text(ptr as *mut Il2CppObject, vtable, &state);
     }
 
-    update_and_sort_item_group(inner_items, strategy, desc, vtable, c"PartsSingleModeSkillListItem", c"_nameText");
+    update_and_sort_item_group(inner_items, strategy, desc, enable_scoring, vtable, c"PartsSingleModeSkillListItem", c"_nameText");
 
-    update_and_sort_item_group(deck_items, strategy, desc, vtable, c"PartsSupportCardDeckSkillListItem", c"_name");
+    update_and_sort_item_group(deck_items, strategy, desc, enable_scoring, vtable, c"PartsSupportCardDeckSkillListItem", c"_name");
 }
 
 unsafe fn update_and_sort_item_group(
     items: Vec<(usize, i32)>,
     strategy: i32,
     desc: bool,
+    enable_scoring: bool,
     vtable: &crate::plugin_api::VtableV2,
     _class_name: &std::ffi::CStr,
     text_field_name: &std::ffi::CStr
@@ -189,15 +211,15 @@ unsafe fn update_and_sort_item_group(
     let core_module = (vtable.il2cpp_get_assembly_image)(c"UnityEngine.CoreModule".as_ptr());
     let component_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"Component".as_ptr());
     let transform_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"Transform".as_ptr());
-    let gameobject_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"GameObject".as_ptr());
+    let object_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"Object".as_ptr());
 
     let get_game_object_addr = (vtable.il2cpp_get_method_addr_cached)(component_class, c"get_gameObject".as_ptr(), 0);
-    let get_active_addr = (vtable.il2cpp_get_method_addr_cached)(gameobject_class, c"get_activeInHierarchy".as_ptr(), 0);
     let get_transform_addr = (vtable.il2cpp_get_method_addr_cached)(component_class, c"get_transform".as_ptr(), 0);
     let get_parent_addr = (vtable.il2cpp_get_method_addr_cached)(transform_class, c"get_parent".as_ptr(), 0);
     let get_sibling_index_addr = (vtable.il2cpp_get_method_addr_cached)(transform_class, c"GetSiblingIndex".as_ptr(), 0);
     let set_sibling_index_addr = (vtable.il2cpp_get_method_addr_cached)(transform_class, c"SetSiblingIndex".as_ptr(), 1);
-    let get_child_count_addr = (vtable.il2cpp_get_method_addr_cached)(transform_class, c"get_childCount".as_ptr(), 0);
+    let set_parent_addr = (vtable.il2cpp_get_method_addr_cached)(transform_class, c"SetParent".as_ptr(), 2);
+    let get_name_addr = (vtable.il2cpp_get_method_addr_cached)(object_class, c"get_name".as_ptr(), 0);
 
     let ui_image = (vtable.il2cpp_get_assembly_image)(c"UnityEngine.UI".as_ptr());
     let text_class = (vtable.il2cpp_get_class)(ui_image, c"UnityEngine.UI".as_ptr(), c"Text".as_ptr());
@@ -207,28 +229,30 @@ unsafe fn update_and_sort_item_group(
     let string_new: extern "C" fn(*const std::ffi::c_char) -> *mut Il2CppString = std::mem::transmute(IL2CPP_STRING_NEW.load(std::sync::atomic::Ordering::Relaxed));
 
     if get_transform_addr.is_null() || get_parent_addr.is_null() || get_sibling_index_addr.is_null()
-        || set_sibling_index_addr.is_null() || get_child_count_addr.is_null() || get_text_addr.is_null()
-        || set_text_addr.is_null() || get_game_object_addr.is_null() || get_active_addr.is_null() {
+        || set_sibling_index_addr.is_null() || get_text_addr.is_null() || set_text_addr.is_null()
+        || get_game_object_addr.is_null() || set_parent_addr.is_null()
+        || get_name_addr.is_null() {
         return;
     }
 
     let get_game_object: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = std::mem::transmute(get_game_object_addr);
-    let get_active: extern "C" fn(*mut Il2CppObject) -> bool = std::mem::transmute(get_active_addr);
     let get_transform: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = std::mem::transmute(get_transform_addr);
     let get_parent: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = std::mem::transmute(get_parent_addr);
     let get_sibling_index: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_sibling_index_addr);
     let set_sibling_index: extern "C" fn(*mut Il2CppObject, i32) = std::mem::transmute(set_sibling_index_addr);
-    let get_child_count: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_child_count_addr);
+    let set_parent: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, bool) = std::mem::transmute(set_parent_addr);
+    let get_name: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppString = std::mem::transmute(get_name_addr);
     let get_text: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppString = std::mem::transmute(get_text_addr);
     let set_text: extern "C" fn(*mut Il2CppObject, *mut Il2CppString) = std::mem::transmute(set_text_addr);
 
+    let is_inner = _class_name.to_bytes() == b"PartsSingleModeSkillListItem";
     let mut active_items = Vec::new();
 
     for &(item_val, skill_id) in items.iter() {
         let item_ptr = item_val as *mut Il2CppObject;
 
         let go = get_game_object(item_ptr);
-        if go.is_null() || !get_active(go) { continue; }
+        if go.is_null() { continue; }
 
         let score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
 
@@ -243,7 +267,7 @@ unsafe fn update_and_sort_item_group(
                 let current_str = (*get_text(name_text_obj)).as_string();
                 let base_str = current_str.split("<color=").next().unwrap_or(&current_str).trim_end();
 
-                let new_text = if score > 0.0 {
+                let new_text = if score > 0.0 && enable_scoring {
                     format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score)
                 } else {
                     base_str.to_string()
@@ -261,68 +285,112 @@ unsafe fn update_and_sort_item_group(
         if !transform.is_null() {
             let parent = get_parent(transform);
             let grandparent = if !parent.is_null() { get_parent(parent) } else { std::ptr::null_mut() };
-            active_items.push((item_ptr, transform, parent, grandparent, score));
-        }
-    }
 
-    let mut parent_counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-    let mut grandparent_counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-
-    for &(_, _, p, gp, _) in active_items.iter() {
-        if !p.is_null() { *parent_counts.entry(p as usize).or_insert(0) += 1; }
-        if !gp.is_null() { *grandparent_counts.entry(gp as usize).or_insert(0) += 1; }
-    }
-
-    let mut grouped_items: std::collections::HashMap<usize, Vec<(*mut Il2CppObject, *mut Il2CppObject, f64, i32)>> = std::collections::HashMap::new();
-
-    for (item_ptr, transform, parent, grandparent, score) in active_items {
-        if parent.is_null() { continue; }
-
-        let p_count = *parent_counts.get(&(parent as usize)).unwrap_or(&0);
-        let gp_count = if grandparent.is_null() { 0 } else { *grandparent_counts.get(&(grandparent as usize)).unwrap_or(&0) };
-
-        let (sort_transform, group_parent) = if p_count > 1 {
-            (transform, parent)
-        } else if gp_count > 1 {
-            (parent, grandparent)
-        } else {
-            let mut st = transform;
-            let mut pr = parent;
-            if get_child_count(pr) == 1 && !grandparent.is_null() {
-                st = pr;
-                pr = grandparent;
+            let mut is_loop = false;
+            let mut is_hint = false;
+            let mut curr = parent;
+            for _ in 0..8 {
+                if curr.is_null() { break; }
+                let curr_go = get_game_object(curr);
+                if !curr_go.is_null() {
+                    let name_str = get_name(curr_go);
+                    if !name_str.is_null() {
+                        let name = (*name_str).as_string();
+                        if name.contains("Loop") { is_loop = true; }
+                        if name.contains("DialogSkillHint") { is_hint = true; }
+                    }
+                }
+                curr = get_parent(curr);
             }
-            (st, pr)
-        };
 
-        let orig_idx = get_sibling_index(sort_transform);
-        grouped_items.entry(group_parent as usize).or_default().push((item_ptr, sort_transform, score, orig_idx));
+            if is_loop { continue; }
+
+            let mut managed_by_global = false;
+            if is_inner {
+                let global_map = crate::hooks::SETUP_LIST_ORIGINAL_ORDER.lock().unwrap();
+                for orig_order in global_map.values() {
+                    if orig_order.contains(&skill_id) { managed_by_global = true; break; }
+                }
+            }
+            if managed_by_global { continue; }
+
+            let transform_ptr = transform as usize;
+            let mut order_map = crate::hooks::TRANSFORM_ORIGINAL_ORDER.lock().unwrap();
+            let map_key = (transform_ptr, skill_id);
+            if !order_map.contains_key(&map_key) {
+                let current_p_idx = get_sibling_index(parent);
+                let current_t_idx = get_sibling_index(transform);
+                order_map.insert(map_key, (parent as usize, current_p_idx, current_t_idx));
+            }
+            drop(order_map);
+
+            active_items.push((item_ptr, transform, parent, grandparent, score, skill_id, is_hint));
+        }
     }
 
-    for (_, mut group) in grouped_items {
-        group.sort_by_key(|&(_, _, _, idx)| idx);
+    if is_inner {
+        let mut roots: std::collections::HashMap<usize, Vec<(*mut Il2CppObject, *mut Il2CppObject, f64, i32, bool)>> = std::collections::HashMap::new();
 
-        let mut runs: Vec<Vec<(*mut Il2CppObject, *mut Il2CppObject, f64, i32)>> = Vec::new();
-        let mut current_run = Vec::new();
+        for (item_ptr, transform, parent, grandparent, score, skill_id, is_hint) in active_items {
+            if parent.is_null() { continue; }
+            let root = if !grandparent.is_null() { grandparent } else { parent };
+            roots.entry(root as usize).or_default().push((item_ptr, transform, score, skill_id, is_hint));
+        }
 
-        for item in group {
-            if current_run.is_empty() {
-                current_run.push(item);
-            } else if item.3 == current_run.last().unwrap().3 + 1 {
-                current_run.push(item);
-            } else {
-                runs.push(current_run);
-                current_run = vec![item];
+        for (_, mut group) in roots {
+            if group.is_empty() { continue; }
+
+            let mut available_slots = Vec::new();
+            let order_map = crate::hooks::TRANSFORM_ORIGINAL_ORDER.lock().unwrap();
+            for item in group.iter() {
+                let transform_ptr = item.1 as usize;
+                let skill_id = item.3;
+                if let Some(&(orig_parent, p_idx, t_idx)) = order_map.get(&(transform_ptr, skill_id)) {
+                    available_slots.push((orig_parent as *mut Il2CppObject, p_idx, t_idx));
+                }
             }
-        }
-        if !current_run.is_empty() {
-            runs.push(current_run);
-        }
+            drop(order_map);
 
-        for mut run in runs {
-            let orig_indices: Vec<i32> = run.iter().map(|&(_, _, _, idx)| idx).collect();
+            available_slots.sort_by_key(|slot| (slot.1, slot.2));
 
-            run.sort_by(|a, b| {
+            group.sort_by(|a, b| {
+                if !enable_scoring {
+                    let skill_a = a.3;
+                    let skill_b = b.3;
+                    let is_hint_a = a.4;
+                    let is_hint_b = b.4;
+
+                    let get_sort_key = |skill_id: i32, transform_ptr: usize, is_hint: bool| -> (usize, usize) {
+                        if is_hint {
+                            let hint_map = crate::hooks::HINT_ORIGINAL_ORDER.lock().unwrap();
+                            for orig_order in hint_map.values() {
+                                if let Some(pos) = orig_order.iter().position(|&id| id == skill_id) {
+                                    return (pos, 0);
+                                }
+                            }
+                        }
+
+                        let order_map = crate::hooks::TRANSFORM_ORIGINAL_ORDER.lock().unwrap();
+                        let &(orig_parent, p_idx, t_idx) = order_map.get(&(transform_ptr, skill_id)).unwrap_or(&(0, 0, 0));
+                        drop(order_map);
+
+                        let container_map = crate::hooks::CONTAINER_ORIGINAL_ORDER.lock().unwrap();
+                        if let Some(orig_order) = container_map.get(&orig_parent) {
+                            if let Some(pos) = orig_order.iter().position(|&id| id == skill_id) {
+                                return (p_idx as usize, pos);
+                            }
+                        }
+                        drop(container_map);
+
+                        (p_idx as usize, t_idx as usize)
+                    };
+
+                    let key_a = get_sort_key(skill_a, a.1 as usize, is_hint_a);
+                    let key_b = get_sort_key(skill_b, b.1 as usize, is_hint_b);
+
+                    return key_a.cmp(&key_b);
+                }
+
                 if desc {
                     b.2.total_cmp(&a.2)
                 } else {
@@ -330,8 +398,70 @@ unsafe fn update_and_sort_item_group(
                 }
             });
 
-            for (i, &(_, sort_transform, _, _)) in run.iter().enumerate() {
-                set_sibling_index(sort_transform, orig_indices[i]);
+            for (i, item) in group.iter().enumerate() {
+                if i >= available_slots.len() { break; }
+                let target_slot = available_slots[i];
+                let item_transform = item.1;
+
+                let current_parent = get_parent(item_transform);
+
+                if current_parent != target_slot.0 {
+                    set_parent(item_transform, target_slot.0, false);
+                }
+
+                set_sibling_index(item_transform, target_slot.2);
+            }
+        }
+    } else {
+        let mut grouped_items: std::collections::HashMap<usize, Vec<(*mut Il2CppObject, *mut Il2CppObject, f64, i32, i32)>> = std::collections::HashMap::new();
+
+        for (item_ptr, transform, parent, _grandparent, score, skill_id, _is_hint) in active_items {
+            if parent.is_null() { continue; }
+            let orig_idx = get_sibling_index(transform);
+            grouped_items.entry(parent as usize).or_default().push((item_ptr, transform, score, orig_idx, skill_id));
+        }
+
+        for (_, mut group) in grouped_items {
+            group.sort_by_key(|&(_, _, _, idx, _)| idx);
+
+            let mut runs: Vec<Vec<(*mut Il2CppObject, *mut Il2CppObject, f64, i32, i32)>> = Vec::new();
+            let mut current_run = Vec::new();
+
+            for item in group {
+                if current_run.is_empty() {
+                    current_run.push(item);
+                } else if item.3 == current_run.last().unwrap().3 + 1 {
+                    current_run.push(item);
+                } else {
+                    runs.push(current_run);
+                    current_run = vec![item];
+                }
+            }
+            if !current_run.is_empty() {
+                runs.push(current_run);
+            }
+
+            for mut run in runs {
+                let orig_indices: Vec<i32> = run.iter().map(|&(_, _, _, idx, _)| idx).collect();
+
+                run.sort_by(|a, b| {
+                    if !enable_scoring {
+                        let order_map = crate::hooks::TRANSFORM_ORIGINAL_ORDER.lock().unwrap();
+                        let a_slot = order_map.get(&(a.1 as usize, a.4)).unwrap_or(&(0, 0, 0));
+                        let b_slot = order_map.get(&(b.1 as usize, b.4)).unwrap_or(&(0, 0, 0));
+                        return a_slot.2.cmp(&b_slot.2);
+                    }
+
+                    if desc {
+                        b.2.total_cmp(&a.2)
+                    } else {
+                        a.2.total_cmp(&b.2)
+                    }
+                });
+
+                for (i, &(_, sort_transform, _, _, _)) in run.iter().enumerate() {
+                    set_sibling_index(sort_transform, orig_indices[i]);
+                }
             }
         }
     }
@@ -350,6 +480,28 @@ extern "C" fn event_system_update_hook(this: *mut c_void) {
                     let is_omission = IS_OMISSION.load(Ordering::Relaxed);
                     let orig_fn: extern "C" fn(*mut c_void, *mut c_void, bool, f32) = std::mem::transmute(orig_ptr);
                     orig_fn(vc, list, is_omission, 0.0);
+                }
+            }
+        }
+
+        unsafe {
+            let list_handle = ACTIVE_PARTS_LIST_HANDLE.load(Ordering::SeqCst);
+            let param_handle = ACTIVE_SETUP_PARAM_HANDLE.load(Ordering::SeqCst);
+
+            if list_handle != 0 && param_handle != 0 {
+                let list_obj = get_valid_target(list_handle);
+                let param_obj = get_valid_target(param_handle);
+
+                if !list_obj.is_null() && !param_obj.is_null() {
+                    let vtable = &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2);
+                    sort_setup_parameter_list(param_obj, vtable);
+
+                    let hash = ACTIVE_RESOURCE_HASH.load(Ordering::SeqCst);
+                    let orig_ptr = PARTS_SINGLE_MODE_SKILL_LIST_SETUP_ORIG.load(Ordering::Relaxed);
+                    if !orig_ptr.is_null() {
+                        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, i32) = std::mem::transmute(orig_ptr);
+                        orig_fn(list_obj, param_obj, hash);
+                    }
                 }
             }
         }
@@ -388,6 +540,7 @@ pub unsafe fn sort_and_collect_skills(skill_info_list: *mut c_void) {
         orig_idx: usize,
         ptr: *mut Il2CppObject,
         group_id: i32,
+        primary_id: i32,
     }
 
     let mut sortable_infos = Vec::with_capacity(size as usize);
@@ -481,6 +634,7 @@ pub unsafe fn sort_and_collect_skills(skill_info_list: *mut c_void) {
             orig_idx: i,
             ptr: obj,
             group_id,
+            primary_id,
         });
     }
 
@@ -502,10 +656,26 @@ pub unsafe fn sort_and_collect_skills(skill_info_list: *mut c_void) {
         }
     }
 
+    let mut orig_order_guard = LEARNING_LIST_ORIGINAL_ORDER.lock().unwrap();
+    if orig_order_guard.is_empty() {
+        for info in &sortable_infos {
+            orig_order_guard.push(info.primary_id);
+        }
+    }
+    let orig_order = orig_order_guard.clone();
+    drop(orig_order_guard);
+
     let desc = state.sort_descending;
     let mode = state.sort_mode;
+    let enable_scoring = state.enable_scoring;
 
     sortable_infos.sort_by(|a, b| {
+        if !enable_scoring {
+            let idx_a = orig_order.iter().position(|&id| id == a.primary_id).unwrap_or(usize::MAX);
+            let idx_b = orig_order.iter().position(|&id| id == b.primary_id).unwrap_or(usize::MAX);
+            return idx_a.cmp(&idx_b);
+        }
+
         let score_a = group_total_scores[&a.group_id];
         let score_b = group_total_scores[&b.group_id];
 
@@ -557,6 +727,13 @@ extern "C" fn play_out_view_hook(this: *mut c_void) -> *mut c_void {
             for &(handle, _) in items.iter() { free_handle(handle); }
             items.clear();
         }
+
+        LEARNING_LIST_ORIGINAL_ORDER.lock().unwrap().clear();
+
+        let old_list = ACTIVE_PARTS_LIST_HANDLE.swap(0, Ordering::SeqCst);
+        if old_list != 0 { free_handle(old_list); }
+        let old_param = ACTIVE_SETUP_PARAM_HANDLE.swap(0, Ordering::SeqCst);
+        if old_param != 0 { free_handle(old_param); }
     }
 
     let orig_ptr = PLAY_OUT_VIEW_ORIG.load(Ordering::Relaxed);
@@ -629,6 +806,7 @@ unsafe fn update_learning_item_text(this: *mut Il2CppObject, vtable: &VtableV2, 
 
     let strategy = state.target_strategy;
     let sort_mode = state.sort_mode;
+    let enable_scoring = state.enable_scoring;
 
     let group_id = if let Some(db) = crate::data::SKILL_DB.as_ref() {
         *db.skill_to_group.get(&skill_id).unwrap_or(&skill_id)
@@ -647,28 +825,32 @@ unsafe fn update_learning_item_text(this: *mut Il2CppObject, vtable: &VtableV2, 
 
     let individual_score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
 
-    let new_text = if individual_score > 0.0 && cost > 0 {
-        if sort_mode == 2 {
-            let ind_eff = (individual_score * 100.0) / (cost as f64);
-            if fam_cost > 0 && (fam_cost > cost || (fam_score - individual_score).abs() > 0.01) {
-                let fam_eff = (fam_score * 100.0) / (fam_cost as f64);
-                format!("{} <color=#ffb000>[{:.2}pt|{:.2}e]</color> <color=#bbbbbb>(T:{:.2}e)</color>", base_str, individual_score, ind_eff, fam_eff)
+    let new_text = if enable_scoring {
+        if individual_score > 0.0 && cost > 0 {
+            if sort_mode == 2 {
+                let ind_eff = (individual_score * 100.0) / (cost as f64);
+                if fam_cost > 0 && (fam_cost > cost || (fam_score - individual_score).abs() > 0.01) {
+                    let fam_eff = (fam_score * 100.0) / (fam_cost as f64);
+                    format!("{} <color=#ffb000>[{:.2}pt|{:.2}e]</color> <color=#bbbbbb>(T:{:.2}e)</color>", base_str, individual_score, ind_eff, fam_eff)
+                } else {
+                    format!("{} <color=#ffb000>[{:.2}pt|{:.2}e]</color>", base_str, individual_score, ind_eff)
+                }
             } else {
-                format!("{} <color=#ffb000>[{:.2}pt|{:.2}e]</color>", base_str, individual_score, ind_eff)
+                if fam_cost > 0 && (fam_cost > cost || (fam_score - individual_score).abs() > 0.01) {
+                    format!("{} <color=#ffb000>[{:.2}pt]</color> <color=#bbbbbb>(T:{:.2}pt)</color>", base_str, individual_score, fam_score)
+                } else {
+                    format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, individual_score)
+                }
             }
         } else {
-            if fam_cost > 0 && (fam_cost > cost || (fam_score - individual_score).abs() > 0.01) {
-                format!("{} <color=#ffb000>[{:.2}pt]</color> <color=#bbbbbb>(T:{:.2}pt)</color>", base_str, individual_score, fam_score)
+            if cost == 0 && individual_score > 0.0 {
+                format!("{} <color=#777777>[{:.2}pt (Acq)]</color>", base_str, individual_score)
             } else {
-                format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, individual_score)
+                format!("{} <color=#777777>[-- pt]</color>", base_str)
             }
         }
     } else {
-        if cost == 0 && individual_score > 0.0 {
-            format!("{} <color=#777777>[{:.2}pt (Acq)]</color>", base_str, individual_score)
-        } else {
-            format!("{} <color=#777777>[-- pt]</color>", base_str)
-        }
+        base_str.to_string()
     };
 
     if new_text != current_str {
@@ -689,14 +871,12 @@ extern "C" fn update_current_hook(this: *mut Il2CppObject) {
         let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
 
         if let Ok(mut items) = TRACKED_LEARNING_ITEMS.lock() {
-            let mut found = false;
             items.retain(|&handle| {
                 let obj = get_valid_target(handle);
-                if obj.is_null() { free_handle(handle); return false; }
-                if obj == this { found = true; }
+                if obj.is_null() || obj == this { free_handle(handle); return false; }
                 true
             });
-            if !found { items.push(new_handle(this, false)); }
+            items.push(new_handle(this, false));
         }
 
         let vtable = &*(VTABLE_PTR.load(Ordering::Relaxed) as *const VtableV2);
@@ -708,22 +888,22 @@ extern "C" fn update_current_hook(this: *mut Il2CppObject) {
 extern "C" fn dialog_skill_hint_open_hook(skill_data_array: *mut Il2CppArray) {
     if !skill_data_array.is_null() {
         unsafe {
+            let arr_ptr = skill_data_array as usize;
+            let mut order_map = HINT_ORIGINAL_ORDER.lock().unwrap();
             let slice = (*skill_data_array).get_i32_mut_slice();
 
-            let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
-            let strategy = state.target_strategy;
-            let desc = state.sort_descending;
+            let mut needs_insert = true;
+            if let Some(orig) = order_map.get(&arr_ptr) {
+                let mut c_sorted = slice.to_vec();
+                c_sorted.sort_unstable();
+                let mut o_sorted = orig.clone();
+                o_sorted.sort_unstable();
+                if c_sorted == o_sorted { needs_insert = false; }
+            }
 
-            slice.sort_by(|a, b| {
-                let score_a = crate::data::get_skill_score(*a, strategy).unwrap_or(0.0);
-                let score_b = crate::data::get_skill_score(*b, strategy).unwrap_or(0.0);
-
-                if desc {
-                    score_b.total_cmp(&score_a)
-                } else {
-                    score_a.total_cmp(&score_b)
-                }
-            });
+            if needs_insert {
+                order_map.insert(arr_ptr, slice.to_vec());
+            }
         }
     }
 
@@ -732,6 +912,8 @@ extern "C" fn dialog_skill_hint_open_hook(skill_data_array: *mut Il2CppArray) {
         let orig_fn: extern "C" fn(*mut Il2CppArray) = unsafe { std::mem::transmute(orig_ptr) };
         orig_fn(skill_data_array);
     }
+
+    crate::hooks::trigger_list_refresh();
 }
 
 extern "C" fn parts_skill_list_item_update_hook(
@@ -770,20 +952,20 @@ extern "C" fn parts_skill_list_item_update_hook(
         let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
 
         if let Ok(mut items) = TRACKED_INNER_ITEMS.lock() {
-            let mut found = false;
             items.retain(|&(handle, _)| {
                 let obj = get_valid_target(handle);
-                if obj.is_null() { free_handle(handle); return false; }
-                if obj == this { found = true; }
+                if obj.is_null() || obj == this { free_handle(handle); return false; }
                 true
             });
-            if !found { items.push((new_handle(this, false), skill_id)); }
+            items.push((new_handle(this, false), skill_id));
         }
 
-        let strategy = crate::data::OPTIMIZER_STATE.lock().unwrap().target_strategy;
+        let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+        let strategy = state.target_strategy;
+        let enable_scoring = state.enable_scoring;
         let score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
 
-        if score > 0.0 {
+        if score > 0.0 || !enable_scoring {
             let item_class = (*this).klass;
             let name_text_obj: *mut Il2CppObject = std::ptr::null_mut();
             (vtable.il2cpp_get_field_value)(this as *mut c_void, (vtable.il2cpp_get_field_from_name)(item_class, c"_nameText".as_ptr()), &name_text_obj as *const _ as *mut c_void);
@@ -797,7 +979,11 @@ extern "C" fn parts_skill_list_item_update_hook(
             let current_str = (*get_text(name_text_obj)).as_string();
             let base_str = current_str.split("<color=").next().unwrap_or(&current_str).trim_end();
 
-            let new_text = format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score);
+            let new_text = if score > 0.0 && enable_scoring {
+                format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score)
+            } else {
+                base_str.to_string()
+            };
 
             if new_text != current_str {
                 let string_new: extern "C" fn(*const c_char) -> *mut Il2CppString = std::mem::transmute(IL2CPP_STRING_NEW.load(Ordering::Relaxed));
@@ -805,6 +991,8 @@ extern "C" fn parts_skill_list_item_update_hook(
             }
         }
     }
+
+    unsafe { apply_live_ui_updates(); }
 }
 
 extern "C" fn parts_skill_list_container_update_hook(
@@ -827,44 +1015,85 @@ extern "C" fn parts_skill_list_container_update_hook(
                 (vtable.il2cpp_get_field_value)(info_list as _, items_field, &mut items_array as *mut _ as _);
 
                 if !items_array.is_null() && size > 1 {
-                    let mut sortable_infos = Vec::with_capacity(size as usize);
-                    let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
-                    let strategy = state.target_strategy;
-                    let desc = state.sort_descending;
+                    let mut managed_by_global = false;
+                    let core_module = (vtable.il2cpp_get_assembly_image)(c"UnityEngine.CoreModule".as_ptr());
+                    let component_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"Component".as_ptr());
+                    let transform_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"Transform".as_ptr());
+                    let object_class = (vtable.il2cpp_get_class)(core_module, c"UnityEngine".as_ptr(), c"Object".as_ptr());
 
-                    for i in 0..size as usize {
-                        let item_info = (*items_array).get_obj(i);
-                        if item_info.is_null() { continue; }
+                    let get_game_object_addr = (vtable.il2cpp_get_method_addr_cached)(component_class, c"get_gameObject".as_ptr(), 0);
+                    let get_transform_addr = (vtable.il2cpp_get_method_addr_cached)(component_class, c"get_transform".as_ptr(), 0);
+                    let get_parent_addr = (vtable.il2cpp_get_method_addr_cached)(transform_class, c"get_parent".as_ptr(), 0);
+                    let get_name_addr = (vtable.il2cpp_get_method_addr_cached)(object_class, c"get_name".as_ptr(), 0);
 
-                        let item_class = (*item_info).klass;
-                        let mut skill_id = 0;
+                    let mut container_transform: *mut Il2CppObject = std::ptr::null_mut();
 
-                        let get_id_addr = (vtable.il2cpp_get_method_addr_cached)(item_class, c"get_Id".as_ptr(), 0);
-                        if !get_id_addr.is_null() {
-                            let get_id: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_id_addr);
-                            skill_id = get_id(item_info);
-                        } else {
-                            let backing_field = (vtable.il2cpp_get_field_from_name)(item_class, c"<Id>k__BackingField".as_ptr());
-                            if !backing_field.is_null() {
-                                (vtable.il2cpp_get_field_value)(item_info as *mut c_void, backing_field, &mut skill_id as *mut _ as *mut c_void);
+                    if !get_game_object_addr.is_null() && !get_transform_addr.is_null() && !get_parent_addr.is_null() && !get_name_addr.is_null() {
+                        let get_game_object: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = std::mem::transmute(get_game_object_addr);
+                        let get_transform: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = std::mem::transmute(get_transform_addr);
+                        let get_parent: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = std::mem::transmute(get_parent_addr);
+                        let get_name: extern "C" fn(*mut Il2CppObject) -> *mut crate::il2cpp_types::Il2CppString = std::mem::transmute(get_name_addr);
+
+                        container_transform = get_transform(this);
+                        let mut curr = container_transform;
+                        for _ in 0..8 {
+                            if curr.is_null() { break; }
+                            let curr_go = get_game_object(curr);
+                            if !curr_go.is_null() {
+                                let name_str = get_name(curr_go);
+                                if !name_str.is_null() {
+                                    let name = (*name_str).as_string();
+                                    if name.contains("Loop") {
+                                        managed_by_global = true;
+                                        break;
+                                    }
+                                }
                             }
+                            curr = get_parent(curr);
                         }
-
-                        let score = if skill_id > 0 { crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0) } else { 0.0 };
-                        sortable_infos.push((item_info, score));
                     }
 
-                    if sortable_infos.len() == size as usize {
-                        sortable_infos.sort_by(|a, b| {
-                            if desc {
-                                b.1.total_cmp(&a.1)
-                            } else {
-                                a.1.total_cmp(&b.1)
-                            }
-                        });
+                    if !managed_by_global {
+                        let mut current_ids = Vec::with_capacity(size as usize);
 
-                        for (i, (ptr, _)) in sortable_infos.iter().enumerate() {
-                            (*items_array).set_obj(i, *ptr);
+                        for i in 0..size as usize {
+                            let item_info = (*items_array).get_obj(i);
+                            if item_info.is_null() { continue; }
+
+                            let item_class = (*item_info).klass;
+                            let mut skill_id = 0;
+
+                            let get_id_addr = (vtable.il2cpp_get_method_addr_cached)(item_class, c"get_Id".as_ptr(), 0);
+                            if !get_id_addr.is_null() {
+                                let get_id: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_id_addr);
+                                skill_id = get_id(item_info);
+                            } else {
+                                let backing_field = (vtable.il2cpp_get_field_from_name)(item_class, c"<Id>k__BackingField".as_ptr());
+                                if !backing_field.is_null() {
+                                    (vtable.il2cpp_get_field_value)(item_info as *mut c_void, backing_field, &mut skill_id as *mut _ as *mut c_void);
+                                }
+                            }
+                            current_ids.push(skill_id);
+                        }
+
+                        if current_ids.len() == size as usize {
+                            let mut order_map = CONTAINER_ORIGINAL_ORDER.lock().unwrap();
+                            let list_ptr = if !container_transform.is_null() { container_transform as usize } else { info_list as usize };
+
+                            let mut needs_insert = true;
+                            if let Some(orig_ids) = order_map.get(&list_ptr) {
+                                let mut c_sorted = current_ids.clone();
+                                c_sorted.sort_unstable();
+                                let mut o_sorted = orig_ids.clone();
+                                o_sorted.sort_unstable();
+                                if c_sorted == o_sorted {
+                                    needs_insert = false;
+                                }
+                            }
+
+                            if needs_insert {
+                                order_map.insert(list_ptr, current_ids);
+                            }
                         }
                     }
                 }
@@ -877,6 +1106,8 @@ extern "C" fn parts_skill_list_container_update_hook(
         let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, i32) = unsafe { std::mem::transmute(orig_ptr) };
         orig_fn(this, info_list, resource_hash);
     }
+
+    unsafe { apply_live_ui_updates(); }
 }
 
 extern "C" fn setup_skill_content_hook(
@@ -890,6 +1121,7 @@ extern "C" fn setup_skill_content_hook(
             for &(handle, _) in items.iter() { free_handle(handle); }
             items.clear();
         }
+        crate::hooks::TRANSFORM_ORIGINAL_ORDER.lock().unwrap().clear();
     }
 
     let orig_ptr = SETUP_SKILL_CONTENT_ORIG.load(Ordering::Relaxed);
@@ -930,20 +1162,20 @@ extern "C" fn deck_skill_item_update_hook(
         let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
 
         if let Ok(mut items) = TRACKED_DECK_ITEMS.lock() {
-            let mut found = false;
             items.retain(|&(handle, _)| {
                 let obj = get_valid_target(handle);
-                if obj.is_null() { free_handle(handle); return false; }
-                if obj == this { found = true; }
+                if obj.is_null() || obj == this { free_handle(handle); return false; }
                 true
             });
-            if !found { items.push((new_handle(this, false), skill_id)); }
+            items.push((new_handle(this, false), skill_id));
         }
 
-        let strategy = crate::data::OPTIMIZER_STATE.lock().unwrap().target_strategy;
+        let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+        let strategy = state.target_strategy;
+        let enable_scoring = state.enable_scoring;
         let score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
 
-        if score > 0.0 {
+        if score > 0.0 || !enable_scoring {
             let item_class = (*this).klass;
             let name_text_obj: *mut Il2CppObject = std::ptr::null_mut();
 
@@ -958,12 +1190,154 @@ extern "C" fn deck_skill_item_update_hook(
             let current_str = (*get_text(name_text_obj)).as_string();
             let base_str = current_str.split("<color=").next().unwrap_or(&current_str).trim_end();
 
-            let new_text = format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score);
+            let new_text = if score > 0.0 && enable_scoring {
+                format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score)
+            } else {
+                base_str.to_string()
+            };
 
             if new_text != current_str {
                 let string_new: extern "C" fn(*const c_char) -> *mut Il2CppString = std::mem::transmute(IL2CPP_STRING_NEW.load(Ordering::Relaxed));
                 set_text(name_text_obj, string_new(CString::new(new_text).unwrap().as_ptr()));
             }
         }
+    }
+}
+
+pub unsafe fn sort_setup_parameter_list(setup_parameter: *mut Il2CppObject, vtable: &crate::plugin_api::VtableV2) {
+    let param_class = (*setup_parameter).klass;
+    let list_field = (vtable.il2cpp_get_field_from_name)(param_class, c"<SkillInfoList>k__BackingField".as_ptr());
+    if list_field.is_null() { return; }
+
+    let mut info_list: *mut Il2CppObject = std::ptr::null_mut();
+    (vtable.il2cpp_get_field_value)(setup_parameter as _, list_field, &mut info_list as *mut _ as _);
+    if info_list.is_null() { return; }
+
+    let list_class = (*info_list).klass;
+    let size_field = (vtable.il2cpp_get_field_from_name)(list_class, c"_size".as_ptr());
+    let items_field = (vtable.il2cpp_get_field_from_name)(list_class, c"_items".as_ptr());
+
+    if size_field.is_null() || items_field.is_null() { return; }
+
+    let mut size: i32 = 0;
+    (vtable.il2cpp_get_field_value)(info_list as _, size_field, &mut size as *mut _ as _);
+
+    let mut items_array: *mut crate::il2cpp_types::Il2CppArray = std::ptr::null_mut();
+    (vtable.il2cpp_get_field_value)(info_list as _, items_field, &mut items_array as *mut _ as _);
+
+    if items_array.is_null() || size <= 1 { return; }
+
+    let mut sortable_infos = Vec::with_capacity(size as usize);
+    let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+    let strategy = state.target_strategy;
+    let desc = state.sort_descending;
+    let enable_scoring = state.enable_scoring;
+
+    for i in 0..size as usize {
+        let item_info = (*items_array).get_obj(i);
+        if item_info.is_null() { continue; }
+
+        let item_class = (*item_info).klass;
+        let mut skill_id = 0;
+
+        let get_skill_id_addr = (vtable.il2cpp_get_method_addr_cached)(item_class, c"get_SkillId".as_ptr(), 0);
+        if !get_skill_id_addr.is_null() {
+            let get_id: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_skill_id_addr);
+            skill_id = get_id(item_info);
+        } else {
+            let get_id_addr = (vtable.il2cpp_get_method_addr_cached)(item_class, c"get_Id".as_ptr(), 0);
+            if !get_id_addr.is_null() {
+                let get_id: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_id_addr);
+                skill_id = get_id(item_info);
+            } else {
+                let bf1 = (vtable.il2cpp_get_field_from_name)(item_class, c"<SkillId>k__BackingField".as_ptr());
+                if !bf1.is_null() {
+                    (vtable.il2cpp_get_field_value)(item_info as _, bf1, &mut skill_id as *mut _ as _);
+                } else {
+                    let bf2 = (vtable.il2cpp_get_field_from_name)(item_class, c"<Id>k__BackingField".as_ptr());
+                    if !bf2.is_null() {
+                        (vtable.il2cpp_get_field_value)(item_info as _, bf2, &mut skill_id as *mut _ as _);
+                    }
+                }
+            }
+        }
+
+        let score = if skill_id > 0 { crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0) } else { 0.0 };
+        sortable_infos.push((item_info, score, skill_id));
+    }
+
+    if sortable_infos.len() == size as usize {
+        let mut order_map = SETUP_LIST_ORIGINAL_ORDER.lock().unwrap();
+        let list_ptr = info_list as usize;
+
+        let current_ids: Vec<i32> = sortable_infos.iter().map(|&(_, _, id)| id).collect();
+        let mut needs_insert = false;
+
+        if let Some(orig_ids) = order_map.get(&list_ptr) {
+            let mut c_sorted = current_ids.clone();
+            c_sorted.sort_unstable();
+            let mut o_sorted = orig_ids.clone();
+            o_sorted.sort_unstable();
+            if c_sorted != o_sorted {
+                needs_insert = true;
+            }
+        } else {
+            needs_insert = true;
+        }
+
+        if needs_insert {
+            order_map.insert(list_ptr, current_ids);
+        }
+
+        let orig_order = order_map.get(&list_ptr).unwrap().clone();
+        drop(order_map);
+
+        sortable_infos.sort_by(|a, b| {
+            if !enable_scoring {
+                let idx_a = orig_order.iter().position(|&id| id == a.2).unwrap_or(usize::MAX);
+                let idx_b = orig_order.iter().position(|&id| id == b.2).unwrap_or(usize::MAX);
+                return idx_a.cmp(&idx_b);
+            }
+            if desc {
+                b.1.total_cmp(&a.1)
+            } else {
+                a.1.total_cmp(&b.1)
+            }
+        });
+
+        for (i, (ptr, _, _)) in sortable_infos.iter().enumerate() {
+            (*items_array).set_obj(i, *ptr);
+        }
+    }
+}
+
+extern "C" fn parts_single_mode_skill_list_setup_hook(
+    this: *mut Il2CppObject,
+    setup_parameter: *mut Il2CppObject,
+    resource_hash: i32
+) {
+    if !setup_parameter.is_null() {
+        let vtable = unsafe { &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2) };
+        unsafe {
+            let new_handle: extern "C" fn(*mut Il2CppObject, bool) -> u32 = std::mem::transmute(IL2CPP_GCHANDLE_NEW.load(Ordering::Relaxed));
+            let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
+
+            let old_list = ACTIVE_PARTS_LIST_HANDLE.swap(0, Ordering::SeqCst);
+            if old_list != 0 { free_handle(old_list); }
+            let old_param = ACTIVE_SETUP_PARAM_HANDLE.swap(0, Ordering::SeqCst);
+            if old_param != 0 { free_handle(old_param); }
+
+            ACTIVE_PARTS_LIST_HANDLE.store(new_handle(this, false), Ordering::SeqCst);
+            ACTIVE_SETUP_PARAM_HANDLE.store(new_handle(setup_parameter, false), Ordering::SeqCst);
+            ACTIVE_RESOURCE_HASH.store(resource_hash, Ordering::SeqCst);
+
+            sort_setup_parameter_list(setup_parameter, vtable);
+        }
+    }
+
+    let orig_ptr = PARTS_SINGLE_MODE_SKILL_LIST_SETUP_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, i32) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this, setup_parameter, resource_hash);
     }
 }

@@ -133,6 +133,14 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
     unsafe {
         (vtable_v2.gui_ui_heading)(ui, c"Skill Helper".as_ptr());
 
+        let mut enable_scoring = state.enable_scoring;
+        (vtable_v2.gui_ui_checkbox)(ui, c"Enable Scoring & Sorting".as_ptr(), &mut enable_scoring);
+        if enable_scoring != state.enable_scoring {
+            state.enable_scoring = enable_scoring;
+            state_changed = true;
+        }
+        (vtable_v2.gui_ui_separator)(ui);
+
         (vtable_v2.gui_ui_label)(ui, c"Target Strategy:".as_ptr());
 
         let labels_lock = STRATEGY_LABELS.lock().unwrap();

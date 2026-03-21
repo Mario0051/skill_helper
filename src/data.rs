@@ -89,11 +89,15 @@ impl SkillScoreMatrix {
     }
 }
 
+fn default_true() -> bool { true }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizerState {
     pub target_strategy: i32,
     pub sort_descending: bool,
     pub sort_mode: i32,
+    #[serde(default = "default_true")]
+    pub enable_scoring: bool,
     pub collected_skills: HashMap<i32, String>,
 }
 
@@ -131,6 +135,7 @@ pub static OPTIMIZER_STATE: Lazy<Mutex<OptimizerState>> = Lazy::new(|| {
         target_strategy: 1,
         sort_descending: true,
         sort_mode: 0,
+        enable_scoring: true,
         collected_skills: HashMap::new(),
     });
     Mutex::new(state)
