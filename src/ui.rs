@@ -99,9 +99,6 @@ extern "C" fn render_v2_cycler_horizontal(ui: *mut c_void, _userdata: *mut c_voi
             *idx = if *idx == 0 { (t_data.files.len() - 1) as i32 } else { *idx - 1 };
         }
 
-        let current_name = CString::new(format!(" Target: {} ", t_data.names[*idx as usize])).unwrap_or_default();
-        (vtable_v2.gui_ui_label)(ui, current_name.as_ptr());
-
         if (vtable_v2.gui_ui_button)(ui, c"Next >".as_ptr()) {
             *idx = (*idx + 1) % (t_data.files.len() as i32);
         }
@@ -115,6 +112,18 @@ extern "C" fn render_cloud_meta_heading_horizontal(ui: *mut c_void, _userdata: *
     let vtable_v2 = unsafe { &*(vtable_ptr as *const VtableV2) };
     unsafe {
         (vtable_v2.gui_ui_heading)(ui, c"Cloud Meta\nDownloader".as_ptr());
+    }
+}
+
+extern "C" fn render_v2_tight_label_horizontal(ui: *mut c_void, userdata: *mut c_void) {
+    let vtable_ptr = crate::VTABLE_PTR.load(Ordering::Relaxed);
+    if vtable_ptr.is_null() || userdata.is_null() { return; }
+
+    let vtable_v2 = unsafe { &*(vtable_ptr as *const VtableV2) };
+    let text_ptr = userdata as *const c_char;
+    
+    unsafe {
+        (vtable_v2.gui_ui_label)(ui, text_ptr);
     }
 }
 
@@ -340,6 +349,19 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 }
 
             } else {
+                let t_data = TRACK_DATA.lock().unwrap();
+                let idx = TRACK_INDEX.lock().unwrap();
+                let current_name = CString::new(format!("Target: {}", t_data.names[*idx as usize])).unwrap_or_default();
+
+                drop(idx);
+                drop(t_data);
+
+                (vtable_v2.gui_ui_horizontal)(
+                    ui, 
+                    Some(render_v2_tight_label_horizontal), 
+                    current_name.as_ptr() as *mut c_void
+                );
+
                 (vtable_v2.gui_ui_horizontal)(ui, Some(render_v2_cycler_horizontal), std::ptr::null_mut());
             }
 
