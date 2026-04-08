@@ -54,8 +54,27 @@ pub fn get_hachimi_base_dir() -> Option<PathBuf> {
     if version >= 3 && !ptr.is_null() {
         let vtable_v3 = unsafe { &*(ptr as *const VtableV3) };
         let c_path = unsafe { CStr::from_ptr((vtable_v3.hachimi_get_base_dir)()) };
-        Some(PathBuf::from(c_path.to_str().unwrap_or("")))
-    } else {
+        return Some(PathBuf::from(c_path.to_str().unwrap_or("")));
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let possible_paths = [
+            "/storage/emulated/0/Android/media/jp.co.cygames.umamusume/hachimi",
+            "/sdcard/Android/media/jp.co.cygames.umamusume/hachimi",
+            "/data/local/tmp/hachimi"
+        ];
+
+        for p in possible_paths {
+            if std::path::Path::new(p).exists() {
+                return Some(PathBuf::from(p));
+            }
+        }
+        Some(PathBuf::from(possible_paths[0]))
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
         let mut p = std::env::current_exe().unwrap_or_default();
         p.pop();
         p.push("hachimi");
@@ -77,22 +96,30 @@ pub fn get_hachimi_data_path() -> Option<PathBuf> {
         return Some(PathBuf::from(c_path.to_str().unwrap_or("")));
     }
 
-    let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
-
-    let fallback_paths = vec![
-        PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\UmamusumePrettyDerby_Jpn\UmamusumePrettyDerby_Jpn_Data\Persistent"),
-        PathBuf::from(&user_profile).join(r"AppData\LocalLow\Cygames\umamusume"),
-        PathBuf::from(&user_profile).join(r"Umamusume\umamusume_Data\Persistent"),
-        PathBuf::from(&user_profile).join(r"AppData\LocalLow\Cygames\UmamusumePrettyDerby_Jpn"),
-    ];
-
-    for path in fallback_paths {
-        if path.exists() {
-            return Some(path);
-        }
+    #[cfg(target_os = "android")]
+    {
+        Some(PathBuf::from("/data/data/jp.co.cygames.umamusume/files"))
     }
 
-    None
+    #[cfg(not(target_os = "android"))]
+    {
+        let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+
+        let fallback_paths = vec![
+            PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\UmamusumePrettyDerby_Jpn\UmamusumePrettyDerby_Jpn_Data\Persistent"),
+            PathBuf::from(&user_profile).join(r"AppData\LocalLow\Cygames\umamusume"),
+            PathBuf::from(&user_profile).join(r"Umamusume\umamusume_Data\Persistent"),
+            PathBuf::from(&user_profile).join(r"AppData\LocalLow\Cygames\UmamusumePrettyDerby_Jpn"),
+        ];
+
+        for path in fallback_paths {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        None
+    }
 }
 
 pub fn get_master_db_path() -> Option<PathBuf> {
@@ -110,6 +137,26 @@ pub fn get_master_db_path() -> Option<PathBuf> {
 pub fn load_skill_database() -> Option<SkillDatabase> {
     let path = get_master_db_path()?;
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+
+    let mut text_dict: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let query_text = format!(
+        "SELECT category, [index], text FROM text_data WHERE category IN ({}, {}, {}, {})",
+        DICT_CAT_RACE, DICT_CAT_TRACK, DICT_CAT_SURFACE_DIST, DICT_CAT_LOH
+    );
+
+    if let Ok(mut stmt) = conn.prepare(&query_text) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let category: i32 = row.get(0)?;
+            let index: i32 = row.get(1)?;
+            let text: String = row.get(2)?;
+            Ok((category.to_string(), index.to_string(), text))
+        }) {
+            for row in rows.flatten() {
+                text_dict.entry(row.0).or_default().insert(row.1, row.2);
+            }
+        }
+    }
+
     let mut translations: HashMap<String, String> = HashMap::new();
 
     if let Some(base_dir) = get_hachimi_base_dir() {
@@ -117,8 +164,14 @@ pub fn load_skill_database() -> Option<SkillDatabase> {
 
         if let Ok(data) = std::fs::read_to_string(localized_dir.join("text_data_dict.json")) {
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&data) {
+
                 if let Ok(nested_map) = serde_json::from_value::<HashMap<String, HashMap<String, String>>>(json_val.clone()) {
-                    *TEXT_DATA_DICT.lock().unwrap() = nested_map;
+                    for (cat, items) in nested_map {
+                        let cat_map = text_dict.entry(cat).or_default();
+                        for (idx, text) in items {
+                            cat_map.insert(idx, text);
+                        }
+                    }
                 }
 
                 if let Some(cat_47) = json_val.get(DICT_CAT_SKILL_NAME).and_then(|v| v.as_object()) {
@@ -137,6 +190,8 @@ pub fn load_skill_database() -> Option<SkillDatabase> {
             }
         }
     }
+
+    *TEXT_DATA_DICT.lock().unwrap() = text_dict;
 
     let query = format!("SELECT s.id, s.group_id, s.group_rate, t.text FROM skill_data s LEFT JOIN text_data t ON s.id = t.[index] AND t.category = {}", DICT_CAT_SKILL_NAME);
     let mut stmt = conn.prepare(&query).ok()?;

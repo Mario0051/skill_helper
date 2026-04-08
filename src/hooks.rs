@@ -8,12 +8,18 @@ use crate::il2cpp_types::{Il2CppArray, Il2CppObject, Il2CppString};
 use crate::plugin_api::VtableV2;
 use crate::{get_real_target_addr, VTABLE_PTR};
 
+#[cfg(target_os = "windows")]
 pub static UPDATE_CURRENT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+#[cfg(target_os = "android")]
+pub static UPDATE_SKILL_NAME_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static SETUP_SCROLL_LIST_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static PLAY_OUT_VIEW_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static EVENT_SYSTEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static DIALOG_SKILL_HINT_OPEN_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+#[cfg(target_os = "windows")]
 pub static PARTS_SKILL_LIST_ITEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+#[cfg(target_os = "android")]
+pub static PARTS_SKILL_LIST_ITEM_SETUP_NEED_SKILL_POINT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static PARTS_SKILL_LIST_CONTAINER_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static DECK_SKILL_ITEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static SETUP_SKILL_CONTENT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -63,11 +69,27 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
     IL2CPP_GCHANDLE_GET_TARGET.store((vtable.il2cpp_resolve_symbol)(c"il2cpp_gchandle_get_target".as_ptr()), Ordering::SeqCst);
     IL2CPP_GCHANDLE_FREE.store((vtable.il2cpp_resolve_symbol)(c"il2cpp_gchandle_free".as_ptr()), Ordering::SeqCst);
 
-    let class_item = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillLearningListItem".as_ptr());
-    let update_current_addr = (vtable.il2cpp_get_method_addr)(class_item, c"UpdateCurrent".as_ptr(), 0);
-    UPDATE_CURRENT_ORIG.store((vtable.interceptor_hook)(
-        interceptor, get_real_target_addr(update_current_addr as *mut u8), update_current_hook as *mut c_void
-    ), Ordering::SeqCst);
+    let class_learning_item = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillLearningListItem".as_ptr());
+
+    #[cfg(target_os = "windows")]
+    {
+        let update_current_addr = (vtable.il2cpp_get_method_addr)(class_learning_item, c"UpdateCurrent".as_ptr(), 0);
+        if !update_current_addr.is_null() {
+            UPDATE_CURRENT_ORIG.store((vtable.interceptor_hook)(
+                interceptor, crate::get_real_target_addr(update_current_addr as *mut u8), update_current_hook as *mut c_void
+            ), Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let update_name_addr = (vtable.il2cpp_get_method_addr)(class_learning_item, c"UpdateSkillName".as_ptr(), 1);
+        if !update_name_addr.is_null() {
+            UPDATE_SKILL_NAME_ORIG.store((vtable.interceptor_hook)(
+                interceptor, crate::get_real_target_addr(update_name_addr as *mut u8), update_skill_name_hook as *mut c_void
+            ), Ordering::SeqCst);
+        }
+    }
 
     let class_vc = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"SingleModeSkillLearningViewController".as_ptr());
     let setup_scroll_list_addr = (vtable.il2cpp_get_method_addr)(class_vc, c"SetupScrollList".as_ptr(), 3);
@@ -98,11 +120,25 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
     }
 
     let class_skill_list_item = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillListItem".as_ptr());
-    let update_item_addr = (vtable.il2cpp_get_method_addr)(class_skill_list_item, c"UpdateItem".as_ptr(), 3);
-    if !update_item_addr.is_null() {
-        PARTS_SKILL_LIST_ITEM_UPDATE_ORIG.store((vtable.interceptor_hook)(
-            interceptor, crate::get_real_target_addr(update_item_addr as *mut u8), parts_skill_list_item_update_hook as *mut c_void
-        ), Ordering::SeqCst);
+
+    #[cfg(target_os = "windows")]
+    {
+        let update_item_addr = (vtable.il2cpp_get_method_addr)(class_skill_list_item, c"UpdateItem".as_ptr(), 3);
+        if !update_item_addr.is_null() {
+            PARTS_SKILL_LIST_ITEM_UPDATE_ORIG.store((vtable.interceptor_hook)(
+                interceptor, crate::get_real_target_addr(update_item_addr as *mut u8), parts_skill_list_item_update_hook as *mut c_void
+            ), Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let setup_need_skill_point_addr = (vtable.il2cpp_get_method_addr)(class_skill_list_item, c"SetupNeedSkillPoint".as_ptr(), 0);
+        if !setup_need_skill_point_addr.is_null() {
+            PARTS_SKILL_LIST_ITEM_SETUP_NEED_SKILL_POINT_ORIG.store((vtable.interceptor_hook)(
+                interceptor, crate::get_real_target_addr(setup_need_skill_point_addr as *mut u8), parts_skill_list_item_setup_need_skill_point_hook as *mut c_void
+            ), Ordering::SeqCst);
+        }
     }
 
     let class_skill_container = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillListItemContainer".as_ptr());
@@ -859,6 +895,7 @@ unsafe fn update_learning_item_text(this: *mut Il2CppObject, vtable: &VtableV2, 
     }
 }
 
+#[cfg(target_os = "windows")]
 extern "C" fn update_current_hook(this: *mut Il2CppObject) {
     let orig_ptr = UPDATE_CURRENT_ORIG.load(Ordering::Relaxed);
     if !orig_ptr.is_null() {
@@ -880,6 +917,33 @@ extern "C" fn update_current_hook(this: *mut Il2CppObject) {
         }
 
         let vtable = &*(VTABLE_PTR.load(Ordering::Relaxed) as *const VtableV2);
+        let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+        update_learning_item_text(this, vtable, &state);
+    }
+}
+
+#[cfg(target_os = "android")]
+extern "C" fn update_skill_name_hook(this: *mut Il2CppObject, info: *mut Il2CppObject) {
+    let orig_ptr = UPDATE_SKILL_NAME_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this, info);
+    }
+
+    unsafe {
+        let new_handle: extern "C" fn(*mut Il2CppObject, bool) -> u32 = std::mem::transmute(IL2CPP_GCHANDLE_NEW.load(Ordering::Relaxed));
+        let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
+
+        if let Ok(mut items) = TRACKED_LEARNING_ITEMS.lock() {
+            items.retain(|&handle| {
+                let obj = get_valid_target(handle);
+                if obj.is_null() || obj == this { free_handle(handle); return false; }
+                true
+            });
+            items.push(new_handle(this, false));
+        }
+
+        let vtable = &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2);
         let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
         update_learning_item_text(this, vtable, &state);
     }
@@ -916,6 +980,7 @@ extern "C" fn dialog_skill_hint_open_hook(skill_data_array: *mut Il2CppArray) {
     crate::hooks::trigger_list_refresh();
 }
 
+#[cfg(target_os = "windows")]
 extern "C" fn parts_skill_list_item_update_hook(
     this: *mut Il2CppObject,
     skill_info: *mut Il2CppObject,
@@ -988,6 +1053,89 @@ extern "C" fn parts_skill_list_item_update_hook(
             if new_text != current_str {
                 let string_new: extern "C" fn(*const c_char) -> *mut Il2CppString = std::mem::transmute(IL2CPP_STRING_NEW.load(Ordering::Relaxed));
                 set_text(name_text_obj, string_new(CString::new(new_text).unwrap().as_ptr()));
+            }
+        }
+    }
+
+    unsafe { apply_live_ui_updates(); }
+}
+
+#[cfg(target_os = "android")]
+extern "C" fn parts_skill_list_item_setup_need_skill_point_hook(this: *mut Il2CppObject) {
+    let orig_ptr = PARTS_SKILL_LIST_ITEM_SETUP_NEED_SKILL_POINT_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut Il2CppObject) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this);
+    }
+
+    if this.is_null() { return; }
+
+    let vtable = unsafe { &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2) };
+    unsafe {
+        let item_class = (*this).klass;
+
+        let info_field = (vtable.il2cpp_get_field_from_name)(item_class, c"_info".as_ptr());
+        if info_field.is_null() { return; }
+
+        let mut skill_info: *mut Il2CppObject = std::ptr::null_mut();
+        (vtable.il2cpp_get_field_value)(this as *mut c_void, info_field, &mut skill_info as *mut _ as *mut c_void);
+        if skill_info.is_null() { return; }
+
+        let info_class = (*skill_info).klass;
+        let mut skill_id = 0;
+
+        let get_id_addr = (vtable.il2cpp_get_method_addr_cached)(info_class, c"get_Id".as_ptr(), 0);
+        if !get_id_addr.is_null() {
+            let get_id: extern "C" fn(*mut Il2CppObject) -> i32 = std::mem::transmute(get_id_addr);
+            skill_id = get_id(skill_info);
+        } else {
+            let backing_field = (vtable.il2cpp_get_field_from_name)(info_class, c"<Id>k__BackingField".as_ptr());
+            if !backing_field.is_null() {
+                (vtable.il2cpp_get_field_value)(skill_info as *mut c_void, backing_field, &mut skill_id as *mut _ as *mut c_void);
+            }
+        }
+
+        if skill_id == 0 { return; }
+
+        let new_handle: extern "C" fn(*mut Il2CppObject, bool) -> u32 = std::mem::transmute(IL2CPP_GCHANDLE_NEW.load(Ordering::Relaxed));
+        let free_handle: extern "C" fn(u32) = std::mem::transmute(IL2CPP_GCHANDLE_FREE.load(Ordering::Relaxed));
+
+        if let Ok(mut items) = TRACKED_INNER_ITEMS.lock() {
+            items.retain(|&(handle, _)| {
+                let obj = get_valid_target(handle);
+                if obj.is_null() || obj == this { free_handle(handle); return false; }
+                true
+            });
+            items.push((new_handle(this, false), skill_id));
+        }
+
+        let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+        let strategy = state.target_strategy;
+        let enable_scoring = state.enable_scoring;
+        let score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
+
+        if score > 0.0 || !enable_scoring {
+            let name_text_obj: *mut Il2CppObject = std::ptr::null_mut();
+            (vtable.il2cpp_get_field_value)(this as *mut c_void, (vtable.il2cpp_get_field_from_name)(item_class, c"_nameText".as_ptr()), &name_text_obj as *const _ as *mut c_void);
+            if name_text_obj.is_null() { return; }
+
+            let ui_image = (vtable.il2cpp_get_assembly_image)(c"UnityEngine.UI".as_ptr());
+            let text_class = (vtable.il2cpp_get_class)(ui_image, c"UnityEngine.UI".as_ptr(), c"Text".as_ptr());
+            let get_text: extern "C" fn(*mut Il2CppObject) -> *mut crate::il2cpp_types::Il2CppString = std::mem::transmute((vtable.il2cpp_get_method_addr_cached)(text_class, c"get_text".as_ptr(), 0));
+            let set_text: extern "C" fn(*mut Il2CppObject, *mut crate::il2cpp_types::Il2CppString) = std::mem::transmute((vtable.il2cpp_get_method_addr_cached)(text_class, c"set_text".as_ptr(), 1));
+
+            let current_str = (*get_text(name_text_obj)).as_string();
+            let base_str = current_str.split("<color=").next().unwrap_or(&current_str).trim_end();
+
+            let new_text = if score > 0.0 && enable_scoring {
+                format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score)
+            } else {
+                base_str.to_string()
+            };
+
+            if new_text != current_str {
+                let string_new: extern "C" fn(*const std::ffi::c_char) -> *mut crate::il2cpp_types::Il2CppString = std::mem::transmute(IL2CPP_STRING_NEW.load(Ordering::Relaxed));
+                set_text(name_text_obj, string_new(std::ffi::CString::new(new_text).unwrap().as_ptr()));
             }
         }
     }

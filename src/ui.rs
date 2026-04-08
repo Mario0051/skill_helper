@@ -282,6 +282,7 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                         t_data.names.clear();
                         t_data.files.clear();
                         t_data.c_labels.clear();
+                        t_data.values.clear();
 
                         for (key, e_meta) in &index.events {
                             if let Some(c_meta) = index.courses.get(&e_meta.course_ref) {
