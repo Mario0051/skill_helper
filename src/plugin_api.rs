@@ -1,5 +1,7 @@
 use std::ffi::{c_char, c_void};
 
+pub type HachimiGetApiFn = extern "C" fn(name: *const c_char) -> *mut c_void;
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum InitResult {
@@ -213,4 +215,73 @@ pub struct VtableV3 {
     pub gui_set_menu_width: unsafe extern "C" fn(width: f32),
     pub hachimi_get_base_dir: unsafe extern "C" fn() -> *const c_char,
     pub hachimi_get_data_path: unsafe extern "C" fn() -> *const c_char,
+}
+
+impl VtableV3 {
+    pub unsafe fn from_get_api(get_api: HachimiGetApiFn) -> Self {
+        macro_rules! load {
+            ($name:expr) => {
+                std::mem::transmute(get_api($name.as_ptr()))
+            };
+        }
+
+        Self {
+            base: VtableV2 {
+                hachimi_instance: load!(c"hachimi_instance"),
+                hachimi_get_interceptor: load!(c"hachimi_get_interceptor"),
+                interceptor_hook: load!(c"interceptor_hook"),
+                interceptor_hook_vtable: load!(c"interceptor_hook_vtable"),
+                interceptor_get_trampoline_addr: load!(c"interceptor_get_trampoline_addr"),
+                interceptor_unhook: load!(c"interceptor_unhook"),
+                il2cpp_resolve_symbol: load!(c"il2cpp_resolve_symbol"),
+                il2cpp_get_assembly_image: load!(c"il2cpp_get_assembly_image"),
+                il2cpp_get_class: load!(c"il2cpp_get_class"),
+                il2cpp_get_method: load!(c"il2cpp_get_method"),
+                il2cpp_get_method_overload: load!(c"il2cpp_get_method_overload"),
+                il2cpp_get_method_addr: load!(c"il2cpp_get_method_addr"),
+                il2cpp_get_method_overload_addr: load!(c"il2cpp_get_method_overload_addr"),
+                il2cpp_get_method_cached: load!(c"il2cpp_get_method_cached"),
+                il2cpp_get_method_addr_cached: load!(c"il2cpp_get_method_addr_cached"),
+                il2cpp_find_nested_class: load!(c"il2cpp_find_nested_class"),
+                il2cpp_get_field_from_name: load!(c"il2cpp_get_field_from_name"),
+                il2cpp_get_field_value: load!(c"il2cpp_get_field_value"),
+                il2cpp_set_field_value: load!(c"il2cpp_set_field_value"),
+                il2cpp_get_static_field_value: load!(c"il2cpp_get_static_field_value"),
+                il2cpp_set_static_field_value: load!(c"il2cpp_set_static_field_value"),
+                il2cpp_unbox: load!(c"il2cpp_unbox"),
+                il2cpp_get_main_thread: load!(c"il2cpp_get_main_thread"),
+                il2cpp_get_attached_threads: load!(c"il2cpp_get_attached_threads"),
+                il2cpp_schedule_on_thread: load!(c"il2cpp_schedule_on_thread"),
+                il2cpp_create_array: load!(c"il2cpp_create_array"),
+                il2cpp_get_singleton_like_instance: load!(c"il2cpp_get_singleton_like_instance"),
+                log: load!(c"log"),
+                gui_register_menu_item: load!(c"gui_register_menu_item"),
+                gui_register_menu_section: load!(c"gui_register_menu_section"),
+                gui_show_notification: load!(c"gui_show_notification"),
+                gui_ui_heading: load!(c"gui_ui_heading"),
+                gui_ui_label: load!(c"gui_ui_label"),
+                gui_ui_small: load!(c"gui_ui_small"),
+                gui_ui_separator: load!(c"gui_ui_separator"),
+                gui_ui_button: load!(c"gui_ui_button"),
+                gui_ui_small_button: load!(c"gui_ui_small_button"),
+                gui_ui_checkbox: load!(c"gui_ui_checkbox"),
+                gui_ui_text_edit_singleline: load!(c"gui_ui_text_edit_singleline"),
+                gui_ui_horizontal: load!(c"gui_ui_horizontal"),
+                gui_ui_grid: load!(c"gui_ui_grid"),
+                gui_ui_end_row: load!(c"gui_ui_end_row"),
+                gui_ui_colored_label: load!(c"gui_ui_colored_label"),
+                gui_register_menu_item_icon: load!(c"gui_register_menu_item_icon"),
+                gui_register_menu_section_with_icon: load!(c"gui_register_menu_section_with_icon"),
+                android_dex_load: load!(c"android_dex_load"),
+                android_dex_unload: load!(c"android_dex_unload"),
+                android_dex_call_static_noargs: load!(c"android_dex_call_static_noargs"),
+                android_dex_call_static_string: load!(c"android_dex_call_static_string"),
+            },
+            gui_ui_searchable_combobox: load!(c"gui_ui_searchable_combobox"),
+            gui_get_menu_width: load!(c"gui_get_menu_width"),
+            gui_set_menu_width: load!(c"gui_set_menu_width"),
+            hachimi_get_base_dir: load!(c"hachimi_get_base_dir"),
+            hachimi_get_data_path: load!(c"hachimi_get_data_path"),
+        }
+    }
 }

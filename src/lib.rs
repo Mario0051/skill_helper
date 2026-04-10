@@ -94,12 +94,9 @@ pub unsafe fn get_real_target_addr(mut ptr: *mut u8) -> *mut c_void {
     ptr as *mut c_void
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn hachimi_init(vtable_ptr: *const c_void, version: i32) -> InitResult {
-    HACHIMI_VERSION.store(version, Ordering::SeqCst);
-    VTABLE_PTR.store(vtable_ptr as *mut c_void, Ordering::SeqCst);
-
+fn internal_init(_version: i32) -> InitResult {
     unsafe {
+        let vtable_ptr = VTABLE_PTR.load(Ordering::SeqCst);
         let vtable = &*(vtable_ptr as *const VtableV2);
         (vtable.gui_register_menu_section)(Some(ui::render_optimizer_ui), std::ptr::null_mut());
 
@@ -114,4 +111,26 @@ pub extern "C" fn hachimi_init(vtable_ptr: *const c_void, version: i32) -> InitR
     }
 
     InitResult::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hachimi_init(vtable_ptr: *const c_void, version: i32) -> InitResult {
+    HACHIMI_VERSION.store(version, Ordering::SeqCst);
+    VTABLE_PTR.store(vtable_ptr as *mut c_void, Ordering::SeqCst);
+
+    internal_init(version)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hachimi_init_v3(get_api: plugin_api::HachimiGetApiFn, version: i32) -> InitResult {
+    HACHIMI_VERSION.store(version, Ordering::SeqCst);
+
+    let vtable_ptr = unsafe {
+        let dynamic_vtable = Box::new(plugin_api::VtableV3::from_get_api(get_api));
+        Box::leak(dynamic_vtable) as *const plugin_api::VtableV3 as *mut c_void
+    };
+
+    VTABLE_PTR.store(vtable_ptr, Ordering::SeqCst);
+
+    internal_init(version)
 }
