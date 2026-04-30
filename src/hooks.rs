@@ -334,6 +334,7 @@ unsafe fn update_and_sort_item_group(
                         let name = (*name_str).as_string();
                         if name.contains("Loop") { is_loop = true; }
                         if name.contains("DialogSkillHint") { is_hint = true; }
+                        if name.contains("UpgradeSelect") { is_loop = true; }
                     }
                 }
                 curr = get_parent(curr);
