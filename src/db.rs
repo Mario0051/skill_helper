@@ -41,6 +41,7 @@ pub struct SkillTier {
 pub struct SkillDatabase {
     pub grouped_skills: HashMap<i32, Vec<SkillTier>>,
     pub skill_to_group: HashMap<i32, i32>,
+    pub factor_to_skill: HashMap<i32, i32>,
 }
 
 pub fn get_hachimi_base_dir() -> Option<PathBuf> {
@@ -224,7 +225,21 @@ pub fn load_skill_database() -> Option<SkillDatabase> {
         group.sort_by_key(|s| s.group_rate);
     }
 
-    Some(SkillDatabase { grouped_skills, skill_to_group })
+    let mut factor_to_skill: HashMap<i32, i32> = HashMap::new();
+
+    let factor_query = "SELECT factor_group_id, value_1 FROM succession_factor_effect WHERE target_type = 41 GROUP BY factor_group_id";
+
+    if let Ok(mut stmt) = conn.prepare(factor_query) {
+        if let Ok(factor_iter) = stmt.query_map([], |row| {
+            Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?))
+        }) {
+            for row in factor_iter.flatten() {
+                factor_to_skill.insert(row.0, row.1);
+            }
+        }
+    }
+
+    Some(SkillDatabase { grouped_skills, skill_to_group, factor_to_skill })
 }
 
 pub fn build_track_name(meta: &TrackMetadata) -> String {

@@ -24,6 +24,11 @@ pub static PARTS_SKILL_LIST_CONTAINER_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr
 pub static DECK_SKILL_ITEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static SETUP_SKILL_CONTENT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static PARTS_SINGLE_MODE_SKILL_LIST_SETUP_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static FACTOR_LIST_ITEM_SETUP_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static GET_FILTERED_FACTOR_GROUP_LIST_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static FACTOR_SELECT_SHOW_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static FACTOR_SELECT_HIDE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static FACTOR_SELECT_INSTANCE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static IL2CPP_STRING_NEW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 pub static IL2CPP_GCHANDLE_NEW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -171,6 +176,41 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
         PARTS_SINGLE_MODE_SKILL_LIST_SETUP_ORIG.store((vtable.interceptor_hook)(
             interceptor, crate::get_real_target_addr(setup_list_addr as *mut u8), parts_single_mode_skill_list_setup_hook as *mut c_void
         ), Ordering::SeqCst);
+    }
+
+    let class_factor_item = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"GenerateSuccessionCharaPriorityFactorGroupListItem".as_ptr());
+    let factor_setup_addr = (vtable.il2cpp_get_method_addr)(class_factor_item, c"Setup".as_ptr(), 7);
+    if !factor_setup_addr.is_null() {
+        FACTOR_LIST_ITEM_SETUP_ORIG.store((vtable.interceptor_hook)(
+            interceptor, crate::get_real_target_addr(factor_setup_addr as *mut u8), factor_list_item_setup_hook as *mut c_void
+        ), Ordering::SeqCst);
+    }
+
+    let class_factor_model = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"GenerateSuccessionCharaPriorityFactorSelectModel".as_ptr());
+    let get_filtered_list_addr = (vtable.il2cpp_get_method_addr)(class_factor_model, c"get_FilteredFactorGroupList".as_ptr(), 0);
+    if !get_filtered_list_addr.is_null() {
+        GET_FILTERED_FACTOR_GROUP_LIST_ORIG.store((vtable.interceptor_hook)(
+            interceptor,
+            crate::get_real_target_addr(get_filtered_list_addr as *mut u8),
+            get_filtered_factor_group_list_hook as *mut c_void
+        ), Ordering::SeqCst);
+    }
+
+    let class_factor_select = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"GenerateSuccessionCharaPriorityFactorSelect".as_ptr());
+    if !class_factor_select.is_null() {
+        let show_addr = (vtable.il2cpp_get_method_addr)(class_factor_select, c"Show".as_ptr(), 0);
+        if !show_addr.is_null() {
+            FACTOR_SELECT_SHOW_ORIG.store((vtable.interceptor_hook)(
+                interceptor, crate::get_real_target_addr(show_addr as *mut u8), factor_select_show_hook as *mut c_void
+            ), Ordering::SeqCst);
+        }
+
+        let hide_addr = (vtable.il2cpp_get_method_addr)(class_factor_select, c"Hide".as_ptr(), 1);
+        if !hide_addr.is_null() {
+            FACTOR_SELECT_HIDE_ORIG.store((vtable.interceptor_hook)(
+                interceptor, crate::get_real_target_addr(hide_addr as *mut u8), factor_select_hide_hook as *mut c_void
+            ), Ordering::SeqCst);
+        }
     }
 }
 
@@ -543,7 +583,21 @@ extern "C" fn event_system_update_hook(this: *mut c_void) {
             }
         }
 
-        unsafe { apply_live_ui_updates(); }
+        unsafe {
+            let factor_select_instance = FACTOR_SELECT_INSTANCE.load(Ordering::SeqCst);
+            if !factor_select_instance.is_null() {
+                let vtable = &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2);
+                let factor_select_class = (*(factor_select_instance as *mut Il2CppObject)).klass;
+
+                let on_value_changed_addr = (vtable.il2cpp_get_method_addr_cached)(factor_select_class, c"OnValueChangedInputName".as_ptr(), 0);
+                if !on_value_changed_addr.is_null() {
+                    let on_value_changed: extern "C" fn(*mut c_void) = std::mem::transmute(on_value_changed_addr);
+                    on_value_changed(factor_select_instance);
+                }
+            }
+
+            apply_live_ui_updates();
+        }
     }
 
     let orig_ptr = EVENT_SYSTEM_UPDATE_ORIG.load(Ordering::Relaxed);
@@ -1489,5 +1543,191 @@ extern "C" fn parts_single_mode_skill_list_setup_hook(
     if !orig_ptr.is_null() {
         let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, i32) = unsafe { std::mem::transmute(orig_ptr) };
         orig_fn(this, setup_parameter, resource_hash);
+    }
+}
+
+extern "C" fn factor_list_item_setup_hook(
+    this: *mut Il2CppObject,
+    factor: *mut Il2CppObject,
+    on_click: *mut c_void,
+    on_long_tap: *mut c_void,
+    is_selected: bool,
+    is_enabled: bool,
+    is_hide_race_fit: bool,
+    adjuster_data: *mut c_void
+) {
+    let orig_ptr = FACTOR_LIST_ITEM_SETUP_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, *mut c_void, *mut c_void, bool, bool, bool, *mut c_void) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this, factor, on_click, on_long_tap, is_selected, is_enabled, is_hide_race_fit, adjuster_data);
+    }
+
+    if factor.is_null() || this.is_null() { return; }
+
+    let vtable = unsafe { &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2) };
+    unsafe {
+        let factor_class = (*factor).klass;
+
+        let mut factor_type: i32 = 0;
+        let type_field = (vtable.il2cpp_get_field_from_name)(factor_class, c"FactorType".as_ptr());
+        if !type_field.is_null() {
+            (vtable.il2cpp_get_field_value)(factor as *mut c_void, type_field, &mut factor_type as *mut _ as *mut c_void);
+        } else {
+            factor_type = *((factor as *const u8).add(0x28) as *const i32);
+        }
+
+        if factor_type != 4 { return; }
+
+        let mut factor_group_id: i32 = 0;
+        let group_field = (vtable.il2cpp_get_field_from_name)(factor_class, c"FactorGroupId".as_ptr());
+        if !group_field.is_null() {
+            (vtable.il2cpp_get_field_value)(factor as *mut c_void, group_field, &mut factor_group_id as *mut _ as *mut c_void);
+        } else {
+            factor_group_id = *((factor as *const u8).add(0x14) as *const i32);
+        }
+
+        let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+        let strategy = state.target_strategy;
+        let enable_scoring = state.enable_scoring;
+
+        if !enable_scoring { return; }
+
+        if let Some(db) = crate::data::SKILL_DB.as_ref() {
+            if let Some(&skill_id) = db.factor_to_skill.get(&factor_group_id) {
+
+                let score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
+
+                if score > 0.0 {
+                    let item_class = (*this).klass;
+                    let name_text_obj: *mut Il2CppObject = std::ptr::null_mut();
+
+                    (vtable.il2cpp_get_field_value)(this as *mut c_void, (vtable.il2cpp_get_field_from_name)(item_class, c"_factorName".as_ptr()), &name_text_obj as *const _ as *mut c_void);
+
+                    if !name_text_obj.is_null() {
+                        let ui_image = (vtable.il2cpp_get_assembly_image)(c"UnityEngine.UI".as_ptr());
+                        let text_class = (vtable.il2cpp_get_class)(ui_image, c"UnityEngine.UI".as_ptr(), c"Text".as_ptr());
+                        let get_text: extern "C" fn(*mut Il2CppObject) -> *mut crate::il2cpp_types::Il2CppString = std::mem::transmute((vtable.il2cpp_get_method_addr_cached)(text_class, c"get_text".as_ptr(), 0));
+                        let set_text: extern "C" fn(*mut Il2CppObject, *mut crate::il2cpp_types::Il2CppString) = std::mem::transmute((vtable.il2cpp_get_method_addr_cached)(text_class, c"set_text".as_ptr(), 1));
+
+                        let current_str = (*get_text(name_text_obj)).as_string();
+                        let base_str = current_str.split("<color=").next().unwrap_or(&current_str).trim_end();
+
+                        let new_text = format!("{} <color=#ffb000>[{:.2}pt]</color>", base_str, score);
+
+                        if new_text != current_str {
+                            let string_new: extern "C" fn(*const std::ffi::c_char) -> *mut crate::il2cpp_types::Il2CppString = std::mem::transmute(crate::hooks::IL2CPP_STRING_NEW.load(Ordering::Relaxed));
+                            set_text(name_text_obj, string_new(std::ffi::CString::new(new_text).unwrap().as_ptr()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+extern "C" fn get_filtered_factor_group_list_hook(this: *mut Il2CppObject) -> *mut Il2CppObject {
+    let orig_ptr = GET_FILTERED_FACTOR_GROUP_LIST_ORIG.load(Ordering::Relaxed);
+    let orig_fn: extern "C" fn(*mut Il2CppObject) -> *mut Il2CppObject = unsafe { std::mem::transmute(orig_ptr) };
+
+    let list_obj = orig_fn(this);
+
+    if list_obj.is_null() { return list_obj; }
+
+    let vtable = unsafe { &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2) };
+
+    unsafe {
+        let list_class = (*list_obj).klass;
+        let size_field = (vtable.il2cpp_get_field_from_name)(list_class, c"_size".as_ptr());
+        let items_field = (vtable.il2cpp_get_field_from_name)(list_class, c"_items".as_ptr());
+
+        if size_field.is_null() || items_field.is_null() { return list_obj; }
+
+        let mut size: i32 = 0;
+        (vtable.il2cpp_get_field_value)(list_obj as *mut c_void, size_field, &mut size as *mut _ as *mut c_void);
+
+        if size <= 1 { return list_obj; }
+
+        let mut items_array: *mut crate::il2cpp_types::Il2CppArray = std::ptr::null_mut();
+        (vtable.il2cpp_get_field_value)(list_obj as *mut c_void, items_field, &mut items_array as *mut _ as *mut c_void);
+
+        if items_array.is_null() { return list_obj; }
+
+        let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
+        if !state.enable_scoring { return list_obj; }
+
+        let strategy = state.target_strategy;
+        let sort_descending = state.sort_descending;
+
+        let mut sortable_factors = Vec::with_capacity(size as usize);
+
+        for i in 0..size as usize {
+            let factor_obj = (*items_array).get_obj(i);
+            if factor_obj.is_null() { continue; }
+
+            let factor_class = (*factor_obj).klass;
+
+            let mut factor_type: i32 = 0;
+            let type_field = (vtable.il2cpp_get_field_from_name)(factor_class, c"FactorType".as_ptr());
+            if !type_field.is_null() {
+                (vtable.il2cpp_get_field_value)(factor_obj as *mut c_void, type_field, &mut factor_type as *mut _ as *mut c_void);
+            } else {
+                factor_type = *((factor_obj as *const u8).add(0x28) as *const i32);
+            }
+
+            let mut score = 0.0;
+
+            if factor_type == 4 {
+                let mut factor_group_id: i32 = 0;
+                let group_field = (vtable.il2cpp_get_field_from_name)(factor_class, c"FactorGroupId".as_ptr());
+                if !group_field.is_null() {
+                    (vtable.il2cpp_get_field_value)(factor_obj as *mut c_void, group_field, &mut factor_group_id as *mut _ as *mut c_void);
+                } else {
+                    factor_group_id = *((factor_obj as *const u8).add(0x14) as *const i32);
+                }
+
+                if let Some(db) = crate::data::SKILL_DB.as_ref() {
+                    if let Some(&skill_id) = db.factor_to_skill.get(&factor_group_id) {
+                        score = crate::data::get_skill_score(skill_id, strategy).unwrap_or(0.0);
+                    }
+                }
+            }
+
+            sortable_factors.push((factor_obj, score, factor_type));
+        }
+
+        if sortable_factors.len() == size as usize {
+            sortable_factors.sort_by(|a, b| {
+                let cmp = if sort_descending {
+                    b.1.total_cmp(&a.1)
+                } else {
+                    a.1.total_cmp(&b.1)
+                };
+                cmp.then_with(|| a.2.cmp(&b.2))
+            });
+
+            for (i, (ptr, _, _)) in sortable_factors.iter().enumerate() {
+                (*items_array).set_obj(i, *ptr);
+            }
+        }
+    }
+
+    list_obj
+}
+
+extern "C" fn factor_select_show_hook(this: *mut c_void) {
+    FACTOR_SELECT_INSTANCE.store(this, Ordering::SeqCst);
+    let orig_ptr = FACTOR_SELECT_SHOW_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut c_void) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this);
+    }
+}
+
+extern "C" fn factor_select_hide_hook(this: *mut c_void, force: bool) {
+    FACTOR_SELECT_INSTANCE.store(std::ptr::null_mut(), Ordering::SeqCst);
+    let orig_ptr = FACTOR_SELECT_HIDE_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut c_void, bool) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this, force);
     }
 }
