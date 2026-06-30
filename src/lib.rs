@@ -86,6 +86,59 @@ pub unsafe fn get_real_target_addr(mut ptr: *mut u8) -> *mut c_void {
                     }
                 }
             }
+
+            if (instr & 0x9F000000) == 0x90000000 {
+                let rd = instr & 0x1F;
+                let immlo = (instr >> 29) & 3;
+                let immhi = (instr >> 5) & 0x7FFFF;
+                let mut imm21 = (immhi << 2) | immlo;
+                if imm21 & 0x100000 != 0 {
+                    imm21 |= 0xFFE00000;
+                }
+                let offset = (imm21 as i32 as isize) << 12;
+                let page_addr = (ptr as usize) & !0xFFF;
+                let target_page = page_addr.wrapping_add(offset as usize);
+
+                let next_instr = std::ptr::read_unaligned(ptr.add(4) as *const u32);
+                if (next_instr & 0xFF000000) == 0x91000000 {
+                    let rn = (next_instr >> 5) & 0x1F;
+                    let rd_add = next_instr & 0x1F;
+                    let shift = (next_instr >> 22) & 3;
+                    let mut imm12 = (next_instr >> 10) & 0xFFF;
+                    if shift == 1 {
+                        imm12 <<= 12;
+                    }
+                    if rn == rd {
+                        let target_addr = target_page.wrapping_add(imm12 as usize);
+
+                        let next2_instr = std::ptr::read_unaligned(ptr.add(8) as *const u32);
+                        if (next2_instr & 0xFFFFFC1F) == 0xD61F0000 {
+                            let rn2 = (next2_instr >> 5) & 0x1F;
+                            if rn2 == rd_add {
+                                ptr = target_addr as *mut u8;
+                                continue;
+                            }
+                        }
+                    }
+                } else if (next_instr & 0xFFC00000) == 0xF9400000 {
+                    let rn = (next_instr >> 5) & 0x1F;
+                    let rd_ldr = next_instr & 0x1F;
+                    let imm12 = ((next_instr >> 10) & 0xFFF) * 8;
+                    if rn == rd {
+                        let ptr_addr = target_page.wrapping_add(imm12 as usize);
+                        let target_addr = std::ptr::read_unaligned(ptr_addr as *const usize);
+
+                        let next2_instr = std::ptr::read_unaligned(ptr.add(8) as *const u32);
+                        if (next2_instr & 0xFFFFFC1F) == 0xD61F0000 {
+                            let rn2 = (next2_instr >> 5) & 0x1F;
+                            if rn2 == rd_ldr {
+                                ptr = target_addr as *mut u8;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         break;
