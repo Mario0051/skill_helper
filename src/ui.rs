@@ -216,8 +216,9 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 c"Total Score".as_ptr(),
                 c"Point Cost".as_ptr(),
                 c"Score Efficiency".as_ptr(),
+                c"Default Order".as_ptr(),
             ];
-            let sort_values = [0, 1, 2];
+            let sort_values = [0, 1, 2, 3];
             let mut current_sort = state.sort_mode;
 
             (vtable_v3.gui_ui_searchable_combobox)(
@@ -226,7 +227,7 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 &mut current_sort,
                 sort_values.as_ptr(),
                 sort_ptrs.as_ptr(),
-                3,
+                4,
             );
 
             if current_sort != state.sort_mode {
@@ -237,6 +238,7 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
             let mut is_score = state.sort_mode == 0;
             let mut is_cost = state.sort_mode == 1;
             let mut is_eff = state.sort_mode == 2;
+            let mut is_default = state.sort_mode == 3;
 
             if (vtable_v2.gui_ui_checkbox)(ui, c"Total Score".as_ptr(), &mut is_score) && is_score {
                 state.sort_mode = 0; state_changed = true;
@@ -246,6 +248,9 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
             }
             if (vtable_v2.gui_ui_checkbox)(ui, c"Efficiency".as_ptr(), &mut is_eff) && is_eff {
                 state.sort_mode = 2; state_changed = true;
+            }
+            if (vtable_v2.gui_ui_checkbox)(ui, c"Default Order".as_ptr(), &mut is_default) && is_default {
+                state.sort_mode = 3; state_changed = true;
             }
         }
 

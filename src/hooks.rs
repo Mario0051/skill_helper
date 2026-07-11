@@ -761,7 +761,7 @@ pub unsafe fn sort_and_collect_skills(skill_info_list: *mut c_void) {
     let enable_scoring = state.enable_scoring;
 
     sortable_infos.sort_by(|a, b| {
-        if !enable_scoring {
+        if !enable_scoring || mode == 3 {
             let idx_a = orig_order.iter().position(|&id| id == a.primary_id).unwrap_or(usize::MAX);
             let idx_b = orig_order.iter().position(|&id| id == b.primary_id).unwrap_or(usize::MAX);
             return idx_a.cmp(&idx_b);
@@ -1435,6 +1435,7 @@ pub unsafe fn sort_setup_parameter_list(setup_parameter: *mut Il2CppObject, vtab
     let state = crate::data::OPTIMIZER_STATE.lock().unwrap();
     let strategy = state.target_strategy;
     let desc = state.sort_descending;
+    let mode = state.sort_mode;
     let enable_scoring = state.enable_scoring;
 
     for i in 0..size as usize {
@@ -1497,7 +1498,7 @@ pub unsafe fn sort_setup_parameter_list(setup_parameter: *mut Il2CppObject, vtab
         drop(order_map);
 
         sortable_infos.sort_by(|a, b| {
-            if !enable_scoring {
+            if !enable_scoring || mode == 3 {
                 let idx_a = orig_order.iter().position(|&id| id == a.2).unwrap_or(usize::MAX);
                 let idx_b = orig_order.iter().position(|&id| id == b.2).unwrap_or(usize::MAX);
                 return idx_a.cmp(&idx_b);
@@ -1657,6 +1658,7 @@ extern "C" fn get_filtered_factor_group_list_hook(this: *mut Il2CppObject) -> *m
 
         let strategy = state.target_strategy;
         let sort_descending = state.sort_descending;
+        let mode = state.sort_mode;
 
         let mut sortable_factors = Vec::with_capacity(size as usize);
 
@@ -1696,17 +1698,19 @@ extern "C" fn get_filtered_factor_group_list_hook(this: *mut Il2CppObject) -> *m
         }
 
         if sortable_factors.len() == size as usize {
-            sortable_factors.sort_by(|a, b| {
-                let cmp = if sort_descending {
-                    b.1.total_cmp(&a.1)
-                } else {
-                    a.1.total_cmp(&b.1)
-                };
-                cmp.then_with(|| a.2.cmp(&b.2))
-            });
+            if mode != 3 {
+                sortable_factors.sort_by(|a, b| {
+                    let cmp = if sort_descending {
+                        b.1.total_cmp(&a.1)
+                    } else {
+                        a.1.total_cmp(&b.1)
+                    };
+                    cmp.then_with(|| a.2.cmp(&b.2))
+                });
 
-            for (i, (ptr, _, _)) in sortable_factors.iter().enumerate() {
-                (*items_array).set_obj(i, *ptr);
+                for (i, (ptr, _, _)) in sortable_factors.iter().enumerate() {
+                    (*items_array).set_obj(i, *ptr);
+                }
             }
         }
     }
