@@ -128,7 +128,7 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
 
     #[cfg(target_os = "windows")]
     {
-        let update_item_addr = (vtable.il2cpp_get_method_addr)(class_skill_list_item, c"UpdateItem".as_ptr(), 4);
+        let update_item_addr = (vtable.il2cpp_get_method_addr)(class_skill_list_item, c"UpdateItem".as_ptr(), 5);
         if !update_item_addr.is_null() {
             PARTS_SKILL_LIST_ITEM_UPDATE_ORIG.store((vtable.interceptor_hook)(
                 interceptor, crate::get_real_target_addr(update_item_addr as *mut u8), parts_skill_list_item_update_hook as *mut c_void
@@ -1041,12 +1041,13 @@ extern "C" fn parts_skill_list_item_update_hook(
     skill_info: *mut Il2CppObject,
     is_plate_effect_enable: bool,
     adjuster_data: *mut Il2CppObject,
-    resource_hash: i32
+    resource_hash: i32,
+    on_click_button: *mut Il2CppObject
 ) {
     let orig_ptr = PARTS_SKILL_LIST_ITEM_UPDATE_ORIG.load(Ordering::Relaxed);
     if !orig_ptr.is_null() {
-        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, bool, *mut Il2CppObject, i32) = unsafe { std::mem::transmute(orig_ptr) };
-        orig_fn(this, skill_info, is_plate_effect_enable, adjuster_data, resource_hash);
+        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, bool, *mut Il2CppObject, i32, *mut Il2CppObject) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this, skill_info, is_plate_effect_enable, adjuster_data, resource_hash, on_click_button);
     }
 
     if skill_info.is_null() || this.is_null() { return; }
