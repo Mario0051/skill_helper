@@ -15,10 +15,10 @@ pub static STRATEGY_LABELS: Lazy<Mutex<Vec<CString>>> = Lazy::new(|| {
         if let Ok(conn) = rusqlite::Connection::open_with_flags(&mdb_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
             let query = format!(
                 "SELECT `index`, `text` FROM text_data WHERE category = {} AND `index` IN ({}, {}, {}, {})",
-                crate::db::DICT_CAT_SURFACE_DIST, 
-                crate::db::STRAT_TEXT_IDX_RUNNER, 
-                crate::db::STRAT_TEXT_IDX_LEADER, 
-                crate::db::STRAT_TEXT_IDX_BETWEENER, 
+                crate::db::DICT_CAT_SURFACE_DIST,
+                crate::db::STRAT_TEXT_IDX_RUNNER,
+                crate::db::STRAT_TEXT_IDX_LEADER,
+                crate::db::STRAT_TEXT_IDX_BETWEENER,
                 crate::db::STRAT_TEXT_IDX_CHASER
             );
             if let Ok(mut stmt) = conn.prepare(&query) {
@@ -40,7 +40,34 @@ pub static STRATEGY_LABELS: Lazy<Mutex<Vec<CString>>> = Lazy::new(|| {
     }
 
     let mut dict_path = crate::db::get_hachimi_base_dir().unwrap_or_default();
-    dict_path.push("localized_data");
+    if let Ok(config_str) = std::fs::read_to_string(dict_path.join("config.json")) {
+        if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&config_str) {
+            let mut possible_dirs = Vec::new();
+
+            if let Some(repo_id) = config_json.get("selected_tl_repo_id").and_then(|v| v.as_i64()) {
+                possible_dirs.push(format!("localized_data_{}", repo_id));
+            }
+            if let Some(dir_name) = config_json.get("localized_data_dir").and_then(|v| v.as_str()) {
+                possible_dirs.push(dir_name.to_string());
+            }
+
+            let mut found = false;
+            for dir in &possible_dirs {
+                let path = dict_path.join(dir);
+                if path.exists() {
+                    dict_path.push(dir);
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                if let Some(dir_name) = config_json.get("localized_data_dir").and_then(|v| v.as_str()) {
+                    dict_path.push(dir_name);
+                }
+            }
+        }
+    }
     dict_path.push("text_data_dict.json");
 
     if let Ok(json_str) = std::fs::read_to_string(dict_path) {
@@ -121,7 +148,7 @@ extern "C" fn render_v2_tight_label_horizontal(ui: *mut c_void, userdata: *mut c
 
     let vtable_v2 = unsafe { &*(vtable_ptr as *const VtableV2) };
     let text_ptr = userdata as *const c_char;
-    
+
     unsafe {
         (vtable_v2.gui_ui_label)(ui, text_ptr);
     }
@@ -163,9 +190,9 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 labels_lock[3].as_ptr(),
             ];
             let strategy_values = [
-                crate::db::STRAT_ID_RUNNER, 
-                crate::db::STRAT_ID_LEADER, 
-                crate::db::STRAT_ID_BETWEENER, 
+                crate::db::STRAT_ID_RUNNER,
+                crate::db::STRAT_ID_LEADER,
+                crate::db::STRAT_ID_BETWEENER,
                 crate::db::STRAT_ID_CHASER
             ];
             let mut current_strat = state.target_strategy;
@@ -362,8 +389,8 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 drop(t_data);
 
                 (vtable_v2.gui_ui_horizontal)(
-                    ui, 
-                    Some(render_v2_tight_label_horizontal), 
+                    ui,
+                    Some(render_v2_tight_label_horizontal),
                     current_name.as_ptr() as *mut c_void
                 );
 

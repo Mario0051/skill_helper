@@ -161,33 +161,62 @@ pub fn load_skill_database() -> Option<SkillDatabase> {
     let mut translations: HashMap<String, String> = HashMap::new();
 
     if let Some(base_dir) = get_hachimi_base_dir() {
-        let localized_dir = base_dir.join("localized_data");
+        let mut localized_dir = None;
 
-        if let Ok(data) = std::fs::read_to_string(localized_dir.join("text_data_dict.json")) {
-            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&data) {
+        if let Ok(config_str) = std::fs::read_to_string(base_dir.join("config.json")) {
+            if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&config_str) {
+                let mut possible_dirs = Vec::new();
 
-                if let Ok(nested_map) = serde_json::from_value::<HashMap<String, HashMap<String, String>>>(json_val.clone()) {
-                    for (cat, items) in nested_map {
-                        let cat_map = text_dict.entry(cat).or_default();
-                        for (idx, text) in items {
-                            cat_map.insert(idx, text);
-                        }
+                if let Some(repo_id) = config_json.get("selected_tl_repo_id").and_then(|v| v.as_i64()) {
+                    possible_dirs.push(format!("localized_data_{}", repo_id));
+                }
+                if let Some(dir_name) = config_json.get("localized_data_dir").and_then(|v| v.as_str()) {
+                    possible_dirs.push(dir_name.to_string());
+                }
+
+                for dir in &possible_dirs {
+                    let path = base_dir.join(dir);
+                    if path.exists() {
+                        localized_dir = Some(path);
+                        break;
                     }
                 }
 
-                if let Some(cat_47) = json_val.get(DICT_CAT_SKILL_NAME).and_then(|v| v.as_object()) {
-                    for (k, v) in cat_47 {
-                        if let Some(s) = v.as_str() {
-                            translations.insert(k.clone(), s.to_string());
-                        }
+                if localized_dir.is_none() {
+                    if let Some(dir_name) = config_json.get("localized_data_dir").and_then(|v| v.as_str()) {
+                        localized_dir = Some(base_dir.join(dir_name));
                     }
                 }
             }
         }
 
-        if let Ok(data) = std::fs::read_to_string(localized_dir.join("localize_dict.json")) {
-            if let Ok(flat_map) = serde_json::from_str::<HashMap<String, String>>(&data) {
-                *LOCALIZE_DICT.lock().unwrap() = flat_map;
+        if let Some(localized_dir) = localized_dir {
+            if let Ok(data) = std::fs::read_to_string(localized_dir.join("text_data_dict.json")) {
+                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&data) {
+
+                    if let Ok(nested_map) = serde_json::from_value::<HashMap<String, HashMap<String, String>>>(json_val.clone()) {
+                        for (cat, items) in nested_map {
+                            let cat_map = text_dict.entry(cat).or_default();
+                            for (idx, text) in items {
+                                cat_map.insert(idx, text);
+                            }
+                        }
+                    }
+
+                    if let Some(cat_47) = json_val.get(DICT_CAT_SKILL_NAME).and_then(|v| v.as_object()) {
+                        for (k, v) in cat_47 {
+                            if let Some(s) = v.as_str() {
+                                translations.insert(k.clone(), s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Ok(data) = std::fs::read_to_string(localized_dir.join("localize_dict.json")) {
+                if let Ok(flat_map) = serde_json::from_str::<HashMap<String, String>>(&data) {
+                    *LOCALIZE_DICT.lock().unwrap() = flat_map;
+                }
             }
         }
     }
