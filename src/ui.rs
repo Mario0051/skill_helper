@@ -94,7 +94,7 @@ pub struct TrackData {
     pub names: Vec<String>,
     pub c_labels: Vec<CString>,
     pub values: Vec<i32>,
-    pub base_width: f32,
+    pub search_term: [c_char; 256],
 }
 
 pub static TRACK_DATA: Lazy<Mutex<TrackData>> = Lazy::new(|| {
@@ -103,7 +103,7 @@ pub static TRACK_DATA: Lazy<Mutex<TrackData>> = Lazy::new(|| {
         names: Vec::new(),
         c_labels: Vec::new(),
         values: Vec::new(),
-        base_width: 200.0,
+        search_term: [0; 256],
     })
 });
 
@@ -189,25 +189,20 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 labels_lock[2].as_ptr(),
                 labels_lock[3].as_ptr(),
             ];
-            let strategy_values = [
-                crate::db::STRAT_ID_RUNNER,
-                crate::db::STRAT_ID_LEADER,
-                crate::db::STRAT_ID_BETWEENER,
-                crate::db::STRAT_ID_CHASER
-            ];
-            let mut current_strat = state.target_strategy;
+            let mut current_idx = (state.target_strategy - 1).clamp(0, 3);
 
-            (vtable_v3.gui_ui_searchable_combobox)(
+            (vtable_v3.gui_ui_combo_menu)(
                 ui,
                 c"strategy_selector".as_ptr(),
-                &mut current_strat,
-                strategy_values.as_ptr(),
+                &mut current_idx,
                 strategy_ptrs.as_ptr(),
                 4,
+                std::ptr::null_mut(),
+                0,
             );
 
-            if current_strat != state.target_strategy {
-                state.target_strategy = current_strat;
+            if current_idx != (state.target_strategy - 1) {
+                state.target_strategy = current_idx + 1;
                 state_changed = true;
             }
         } else {
@@ -245,20 +240,20 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
                 c"Score Efficiency".as_ptr(),
                 c"Default Order".as_ptr(),
             ];
-            let sort_values = [0, 1, 2, 3];
-            let mut current_sort = state.sort_mode;
+            let mut current_idx = state.sort_mode.clamp(0, 3);
 
-            (vtable_v3.gui_ui_searchable_combobox)(
+            (vtable_v3.gui_ui_combo_menu)(
                 ui,
                 c"sort_mode_selector".as_ptr(),
-                &mut current_sort,
-                sort_values.as_ptr(),
+                &mut current_idx,
                 sort_ptrs.as_ptr(),
                 4,
+                std::ptr::null_mut(),
+                0,
             );
 
-            if current_sort != state.sort_mode {
-                state.sort_mode = current_sort;
+            if current_idx != state.sort_mode {
+                state.sort_mode = current_idx;
                 state_changed = true;
             }
         } else {
@@ -309,13 +304,6 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
             (vtable_v2.gui_ui_colored_label)(ui, 150, 150, 150, 255, c"Processing Network Request...".as_ptr());
         } else {
             if (vtable_v2.gui_ui_button)(ui, c"1. Fetch Available Tracks".as_ptr()) {
-                if version >= 3 {
-                    let vtable_v3 = &*(vtable_ptr as *const VtableV3);
-
-                    let current_w = (vtable_v3.gui_get_menu_width)();
-                    TRACK_DATA.lock().unwrap().base_width = current_w;
-                }
-
                 IS_NETWORKING.store(true, Ordering::Relaxed);
                 std::thread::spawn(|| {
                     if let Some(index) = crate::data::fetch_index() {
@@ -358,26 +346,27 @@ pub extern "C" fn render_optimizer_ui(ui: *mut c_void, _userdata: *mut c_void) {
         if has_files {
             if version >= 3 {
                 let vtable_v3 = &*(vtable_ptr as *const VtableV3);
-                let t_data = TRACK_DATA.lock().unwrap();
+                let mut t_data = TRACK_DATA.lock().unwrap();
                 let mut idx_lock = TRACK_INDEX.lock().unwrap();
 
                 let label_ptrs: Vec<*const c_char> = t_data.c_labels.iter().map(|c| c.as_ptr()).collect();
                 let mut current_idx = *idx_lock;
 
-                let control_w = t_data.base_width;
+                let search_term_ptr = t_data.search_term.as_mut_ptr();
+                let search_term_len = t_data.search_term.len();
 
-                (vtable_v3.gui_ui_searchable_combobox)(
+                (vtable_v3.gui_ui_combo_menu)(
                     ui,
                     c"track_selector".as_ptr(),
                     &mut current_idx,
-                    t_data.values.as_ptr(),
                     label_ptrs.as_ptr(),
-                    t_data.values.len()
+                    label_ptrs.len(),
+                    search_term_ptr,
+                    search_term_len
                 );
 
                 if current_idx != *idx_lock {
                     *idx_lock = current_idx;
-                    (vtable_v3.gui_set_menu_width)(control_w);
                 }
 
             } else {
