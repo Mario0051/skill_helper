@@ -203,13 +203,14 @@ pub struct VtableV2 {
 pub struct VtableV3 {
     pub base: VtableV2,
 
-    pub gui_ui_searchable_combobox: unsafe extern "C" fn(
+    pub gui_ui_combo_menu: unsafe extern "C" fn(
         ui: *mut c_void,
-        id_salt: *const c_char,
-        selected_value: *mut i32,
-        item_values: *const i32,
-        item_labels: *const *const c_char,
-        item_count: usize
+        id: *const c_char,
+        selected_index: *mut i32,
+        items: *const *const c_char,
+        item_count: usize,
+        search_term: *mut c_char,
+        search_term_len: usize,
     ) -> bool,
     pub gui_get_menu_width: unsafe extern "C" fn() -> f32,
     pub gui_set_menu_width: unsafe extern "C" fn(width: f32),
@@ -277,7 +278,7 @@ impl VtableV3 {
                 android_dex_call_static_noargs: load!(c"android_dex_call_static_noargs"),
                 android_dex_call_static_string: load!(c"android_dex_call_static_string"),
             },
-            gui_ui_searchable_combobox: load!(c"gui_ui_searchable_combobox"),
+            gui_ui_combo_menu: load!(c"gui_ui_combo_menu"),
             gui_get_menu_width: load!(c"gui_get_menu_width"),
             gui_set_menu_width: load!(c"gui_set_menu_width"),
             hachimi_get_base_dir: load!(c"hachimi_get_base_dir"),
