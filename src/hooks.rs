@@ -14,6 +14,7 @@ pub static UPDATE_CURRENT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::nul
 pub static UPDATE_SKILL_NAME_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static SETUP_SCROLL_LIST_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static PLAY_OUT_VIEW_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub static DIALOG_SINGLE_MODE_SUCCESSION_SKILL_LIST_SETUP_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static EVENT_SYSTEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static DIALOG_SKILL_HINT_OPEN_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 #[cfg(target_os = "windows")]
@@ -125,6 +126,7 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
     }
 
     let class_skill_list_item = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillListItem".as_ptr());
+    let class_dialog_single_mode_succession_skill_list = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"DialogSingleModeSuccessionSkillList".as_ptr());
 
     #[cfg(target_os = "windows")]
     {
@@ -144,6 +146,13 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
                 interceptor, crate::get_real_target_addr(setup_need_skill_point_addr as *mut u8), parts_skill_list_item_setup_need_skill_point_hook as *mut c_void
             ), Ordering::SeqCst);
         }
+    }
+
+    let setup_addr = (vtable.il2cpp_get_method_addr)(class_dialog_single_mode_succession_skill_list, c"Setup".as_ptr(), 3);
+    if !setup_addr.is_null() {
+        DIALOG_SINGLE_MODE_SUCCESSION_SKILL_LIST_SETUP_ORIG.store((vtable.interceptor_hook)(
+            interceptor, crate::get_real_target_addr(setup_addr as *mut u8), dialog_single_mode_succession_skill_list_setup_hook as *mut c_void
+        ), Ordering::SeqCst);
     }
 
     let class_skill_container = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillListItemContainer".as_ptr());
@@ -218,7 +227,7 @@ pub fn trigger_list_refresh() {
     NEEDS_REFRESH.store(true, Ordering::SeqCst);
 }
 
-unsafe fn apply_live_ui_updates() {
+unsafe fn apply_live_ui_updates(sort_inner: bool) {
     let vtable = &*(crate::VTABLE_PTR.load(Ordering::Relaxed) as *const crate::plugin_api::VtableV2);
 
     let state = { crate::data::OPTIMIZER_STATE.lock().unwrap().clone() };
@@ -268,7 +277,9 @@ unsafe fn apply_live_ui_updates() {
         update_learning_item_text(ptr as *mut Il2CppObject, vtable, &state);
     }
 
-    update_and_sort_item_group(inner_items, strategy, desc, enable_scoring, vtable, c"PartsSingleModeSkillListItem", c"_nameText");
+    if sort_inner {
+        update_and_sort_item_group(inner_items, strategy, desc, enable_scoring, vtable, c"PartsSingleModeSkillListItem", c"_nameText");
+    }
 
     update_and_sort_item_group(deck_items, strategy, desc, enable_scoring, vtable, c"PartsSupportCardDeckSkillListItem", c"_name");
 }
@@ -366,9 +377,9 @@ unsafe fn update_and_sort_item_group(
             let mut is_hint = false;
             let mut curr = parent;
             for _ in 0..8 {
-                if curr.is_null() { break; }
+                if curr.is_null() || !is_valid_obj(curr as _) { break; }
                 let curr_go = get_game_object(curr);
-                if !curr_go.is_null() {
+                if is_valid_obj(curr_go as _) {
                     let name_str = get_name(curr_go);
                     if !name_str.is_null() {
                         let name = (*name_str).as_string();
@@ -394,7 +405,13 @@ unsafe fn update_and_sort_item_group(
             let transform_ptr = transform as usize;
             let mut order_map = crate::hooks::TRANSFORM_ORIGINAL_ORDER.lock().unwrap();
             let map_key = (transform_ptr, skill_id);
-            if !order_map.contains_key(&map_key) {
+            let mut needs_update = true;
+            if let Some(&(p_ptr, _, _)) = order_map.get(&map_key) {
+                if is_valid_obj(p_ptr as _) {
+                    needs_update = false;
+                }
+            }
+            if needs_update {
                 let current_p_idx = get_sibling_index(parent);
                 let current_t_idx = get_sibling_index(transform);
                 order_map.insert(map_key, (parent as usize, current_p_idx, current_t_idx));
@@ -596,7 +613,7 @@ extern "C" fn event_system_update_hook(this: *mut c_void) {
                 }
             }
 
-            apply_live_ui_updates();
+            apply_live_ui_updates(true);
         }
     }
 
@@ -1114,7 +1131,7 @@ extern "C" fn parts_skill_list_item_update_hook(
         }
     }
 
-    unsafe { apply_live_ui_updates(); }
+    unsafe { apply_live_ui_updates(false); }
 }
 
 #[cfg(target_os = "android")]
@@ -1197,7 +1214,7 @@ extern "C" fn parts_skill_list_item_setup_need_skill_point_hook(this: *mut Il2Cp
         }
     }
 
-    unsafe { apply_live_ui_updates(); }
+    unsafe { apply_live_ui_updates(false); }
 }
 
 extern "C" fn parts_skill_list_container_update_hook(
@@ -1242,9 +1259,9 @@ extern "C" fn parts_skill_list_container_update_hook(
                         container_transform = get_transform(this);
                         let mut curr = container_transform;
                         for _ in 0..8 {
-                            if curr.is_null() { break; }
+                            if curr.is_null() || !is_valid_obj(curr as _) { break; }
                             let curr_go = get_game_object(curr);
-                            if !curr_go.is_null() {
+                            if is_valid_obj(curr_go as _) {
                                 let name_str = get_name(curr_go);
                                 if !name_str.is_null() {
                                     let name = (*name_str).as_string();
@@ -1312,7 +1329,7 @@ extern "C" fn parts_skill_list_container_update_hook(
         orig_fn(this, info_list, resource_hash);
     }
 
-    unsafe { apply_live_ui_updates(); }
+    unsafe { apply_live_ui_updates(false); }
 }
 
 extern "C" fn setup_skill_content_hook(
@@ -1335,7 +1352,7 @@ extern "C" fn setup_skill_content_hook(
         orig_fn(this, support_card_list, single_mode_start_card_id);
     }
 
-    unsafe { apply_live_ui_updates(); }
+    unsafe { apply_live_ui_updates(false); }
 }
 
 extern "C" fn deck_skill_item_update_hook(
@@ -1735,4 +1752,26 @@ extern "C" fn factor_select_hide_hook(this: *mut c_void, force: bool) {
         let orig_fn: extern "C" fn(*mut c_void, bool) = unsafe { std::mem::transmute(orig_ptr) };
         orig_fn(this, force);
     }
+}
+
+extern "C" fn dialog_single_mode_succession_skill_list_setup_hook(
+    this: *mut Il2CppObject,
+    card_data: *mut Il2CppObject,
+    succession_chara_first: *mut Il2CppObject,
+    succession_chara_second: *mut Il2CppObject,
+    method_info: *mut c_void
+) {
+    let orig_ptr = DIALOG_SINGLE_MODE_SUCCESSION_SKILL_LIST_SETUP_ORIG.load(Ordering::Relaxed);
+    if !orig_ptr.is_null() {
+        let orig_fn: extern "C" fn(*mut Il2CppObject, *mut Il2CppObject, *mut Il2CppObject, *mut Il2CppObject, *mut c_void) = unsafe { std::mem::transmute(orig_ptr) };
+        orig_fn(this, card_data, succession_chara_first, succession_chara_second, method_info);
+    }
+
+    unsafe { apply_live_ui_updates(true); }
+}
+
+pub fn is_valid_obj(obj: *mut crate::il2cpp_types::Il2CppObject) -> bool {
+    if obj.is_null() { return false; }
+    let cached_ptr = unsafe { *(((obj as *mut u8).add(0x10)) as *const usize) };
+    cached_ptr != 0
 }
