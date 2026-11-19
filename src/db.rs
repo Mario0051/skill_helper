@@ -74,7 +74,13 @@ pub fn get_hachimi_base_dir() -> Option<PathBuf> {
         Some(PathBuf::from(possible_paths[0]))
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "ios")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/var/mobile".to_string());
+        Some(PathBuf::from(home).join("Documents").join("hachimi"))
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let mut p = std::env::current_exe().unwrap_or_default();
         p.pop();
@@ -102,7 +108,13 @@ pub fn get_hachimi_data_path() -> Option<PathBuf> {
         Some(PathBuf::from("/data/data/jp.co.cygames.umamusume/files"))
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "ios")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/var/mobile".to_string());
+        Some(PathBuf::from(home).join("Documents"))
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
 

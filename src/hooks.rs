@@ -10,14 +10,14 @@ use crate::{get_real_target_addr, VTABLE_PTR};
 
 #[cfg(target_os = "windows")]
 pub static UPDATE_CURRENT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 pub static UPDATE_SKILL_NAME_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static SETUP_SCROLL_LIST_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static PLAY_OUT_VIEW_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static DIALOG_SINGLE_MODE_SUCCESSION_SKILL_LIST_SETUP_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static EVENT_SYSTEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 pub static DIALOG_SKILL_HINT_OPEN_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "ios"))]
 pub static PARTS_SKILL_LIST_ITEM_UPDATE_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 #[cfg(target_os = "android")]
 pub static PARTS_SKILL_LIST_ITEM_SETUP_NEED_SKILL_POINT_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -87,7 +87,7 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
         }
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let update_name_addr = (vtable.il2cpp_get_method_addr)(class_learning_item, c"UpdateSkillName".as_ptr(), 1);
         if !update_name_addr.is_null() {
@@ -128,7 +128,7 @@ pub unsafe fn install(vtable: &VtableV2, interceptor: *mut c_void, image: *mut c
     let class_skill_list_item = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"PartsSingleModeSkillListItem".as_ptr());
     let class_dialog_single_mode_succession_skill_list = (vtable.il2cpp_get_class)(image, c"Gallop".as_ptr(), c"DialogSingleModeSuccessionSkillList".as_ptr());
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "ios"))]
     {
         let update_item_addr = (vtable.il2cpp_get_method_addr)(class_skill_list_item, c"UpdateItem".as_ptr(), 5);
         if !update_item_addr.is_null() {
@@ -994,7 +994,7 @@ extern "C" fn update_current_hook(this: *mut Il2CppObject) {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 extern "C" fn update_skill_name_hook(this: *mut Il2CppObject, info: *mut Il2CppObject) {
     let orig_ptr = UPDATE_SKILL_NAME_ORIG.load(Ordering::Relaxed);
     if !orig_ptr.is_null() {
@@ -1052,7 +1052,7 @@ extern "C" fn dialog_skill_hint_open_hook(skill_data_array: *mut Il2CppArray) {
     crate::hooks::trigger_list_refresh();
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "ios"))]
 extern "C" fn parts_skill_list_item_update_hook(
     this: *mut Il2CppObject,
     skill_info: *mut Il2CppObject,
